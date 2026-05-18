@@ -79,6 +79,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:flex-
 .abtn:active,.abtn.pressed{filter:brightness(1.4);}
 #btn-a{right:0;top:38px;background:rgba(200,30,30,0.7);}   /* A = confirm/interact */
 #btn-b{right:50px;bottom:0;background:rgba(30,30,200,0.5);} /* B = back/run        */
+#btn-z{left:0;top:38px;background:rgba(30,160,60,0.7);}     /* Z = action/rake     */
 #btn-start{right:52px;top:0;background:rgba(80,80,80,0.6);width:36px;height:22px;border-radius:10px;font-size:9px;}
 
 /* Select / Menu button center */
@@ -121,10 +122,11 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:flex-
       <div class="abtn" id="btn-start">START</div>
       <div class="abtn" id="btn-a">A</div>
       <div class="abtn" id="btn-b">B</div>
+      <div class="abtn" id="btn-z">Z</div>
     </div>
   </div>
 </div>
-<div id="hint-bar">Arrows/WASD · Enter=menu · Z=interact</div>
+<div id="hint-bar">Arrows/WASD · Enter=menu · Z=interact/rake</div>
 
 <script>
 // ═══════════════════════════════════════════════
@@ -195,19 +197,20 @@ const G={
   prevZone:1, prevPlayerX:0, prevPlayerY:0, // for returning from PC
   player:{x:14*16,y:18*16,dir:2,frame:0},
   gear:{hat:'cap', jacket:'red', pants:'jeans', tool:'backpack'},
-  keys:{}, tick:0, moveDelay:0,
+  keys:{}, tick:0, moveDelay:0, running:false,
   battle:null, battleParty:[],
   battleMsg:'', battlePhase:'action', pendingAction:null,
   battleTransition:{timer:0,duration:24,fromZone:1},
   whiteout:{timer:0,duration:90},
   btFlashP:0, btFlashE:0, btTick:0, swapMode:false,
+  netAnim:{active:false, timer:0, phase:'throw', result:null, shakeCount:0, shakesLeft:0},
   prevScreen:'world',
   unlockMsg:'', hovered:null, buttons:[],
   naming:false, nameTarget:null, nameStr:'',
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0},
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0},
   // Rake system
   rake:{
     anim:0,         // animation frame counter (>0 = animating)
@@ -217,6 +220,14 @@ const G={
   // Boatman trade
   boatmanTalked:false,
   boatmanTraded:false,
+  // Pig NPC state
+  pig:{
+    searching:false,  // true while pig is running animation
+    timer:0,          // animation frame counter
+    x:0, y:0,         // pig visual position (world pixels)
+    angle:0,          // current run direction
+    result:null,      // 'found'|'empty' — set when timer completes
+  },
   // Reward screen
   pendingReward:null, // trainer reward species id
   pendingItemReward:null, // {name, desc} for item reward screen
@@ -324,6 +335,8 @@ function dn(bug){
   if(bug._instRef && bug._instRef.nickname) return bug._instRef.nickname;
   return BUGS[bug.id].name;
 }
+// Enemy display name — always "Enemy X" for wild/trainer bugs in battle messages
+function dne(bug){ return 'Enemy ' + dn(bug); }
 function buildBattleParty(){
   // Build the active battle party from the first 6 loadout slots,
   // but lead with the first bug that still has HP. Fainted bugs stay
@@ -374,7 +387,7 @@ function getSlotInfo(n){
 }
 
 const SAVE_VERSION = 2;
-const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0};
+const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0};
 
 function clonePlain(value, fallback){
   if(value === undefined || value === null) return fallback;
@@ -464,6 +477,7 @@ function getSaveData(){
     },
     boatmanTalked: !!G.boatmanTalked,
     boatmanTraded: !!G.boatmanTraded,
+    pigFeeds:     G.pig._feeds || 0,
     npcStates:    getNPCSaveState(),
     bugdexScroll: G.bugdexScroll || 0,
     loadoutScroll:G.loadoutScroll || 0,
@@ -512,6 +526,8 @@ function loadFromSlot(n){
     };
     G.boatmanTalked = !!d.boatmanTalked;
     G.boatmanTraded = !!d.boatmanTraded;
+    G.pig._feeds = d.pigFeeds || 0;
+    G.pig.searching = false; G.pig.timer = 0; G.pig.result = null;
     G.bugdexScroll = d.bugdexScroll || 0;
     G.loadoutScroll = d.loadoutScroll || 0;
     G.keys = {};
@@ -638,7 +654,7 @@ function drawSaveScreen(){
 
   BTN(40, 400, 120, 26, '← BACK', ()=>{ _saveScreen.confirmDelete=null; G.screen='title'; });
   if(!isLoad){
-    T('Auto-saves overwrite active slot on catch & zone change', 240, 428, 4, '#506070', 'center');
+    T('Use SAVE GAME from the menu to save.', 240, 428, 4, '#506070', 'center');
   }
 }
 
@@ -1610,7 +1626,7 @@ function drawWorld(){
   // current tile, so holding a direction produces unbroken motion.
   if(G.moveDelay > 0) G.moveDelay--;
   const visAtTile = Math.abs(p.visX - p.x) < 0.5 && Math.abs(p.visY - p.y) < 0.5;
-  if(visAtTile && G.moveDelay === 0){
+  if(visAtTile && G.moveDelay === 0 && !G.pig.searching){
     let dx=0,dy=0;
     if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
     else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
@@ -1637,8 +1653,11 @@ function drawWorld(){
     }
   }
 
+  // Running: mobile B-hold or keyboard Shift
+  G.running = !!(G.keys['Shift'] || G.keys['_run']);
+
   // Linear visual interpolation toward target tile — continuous motion when key held
-  const _spd = 1.4; // pixels per frame; 16px tile completes in ~12 frames
+  const _spd = G.running ? 2.8 : 1.4; // run = 2× speed
   const _dx = p.x - p.visX, _dy = p.y - p.visY;
   if(Math.abs(_dx) > 0.4) p.visX += Math.sign(_dx) * Math.min(_spd, Math.abs(_dx));
   else p.visX = p.x;
@@ -1680,6 +1699,9 @@ function drawWorld(){
 
   drawPlayer(X,p.visX-camX,p.visY-camY,p.dir,p.frame,inWater);
 
+  // Pig search animation (runs over world, player frozen)
+  if(G.pig.searching) updatePig(camX, camY);
+
   // Hints - shown above bottom-left HUD, right-justified to avoid overlap
   const ptx=Math.round(p.x/TW),pty=Math.round(p.y/TW);
   if(G.zone===1){
@@ -1698,15 +1720,13 @@ function drawWorld(){
     const msgH=Math.max(90,34+msgLines.length*22);
     panel(40,160,400,msgH,'#f8f8e8');
     msgLines.forEach((l,i)=>T(l,60,190+i*22,7,'#303848'));
+    // Dismiss prompt
+    if(Math.floor(G.tick/18)%2===0) T('▼',428,160+msgH-8,8,'#909898','right');
+    G.buttons.push({x:40,y:160,w:400,h:msgH,label:'pcmsg_dismiss',action:()=>{G.pcMsgTimer=0;}});
   }
 
   drawWorldHUD();
   BTN(348,4,128,26,'MENU',openMenuFromWorld);
-
-  // RAKE button — shown in zone 2 water tiles when player has rake
-  if(G.zone===2&&G.inventory.lakeRake&&inWater){
-    BTN(348,36,128,26,'🪣 RAKE',()=>doRakeAction());
-  }
 
   // Rake animation — spinning rake overlay
   if(G.rake.anim>0){
@@ -1754,7 +1774,6 @@ function tryTalkDesk(){
   G.pcMsg = 'Dr. Marshall:\nAll your bugs have been\nfully restored!';
   G.pcMsgTimer = 180; // ~3 seconds — auto-dismisses
   sfx('heal');
-  autoSave();
 }
 
 function startBattleTransition(){
@@ -1800,7 +1819,6 @@ function doPortal(tx,ty){
   else if(G.zone===3&&ty===1){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(2);sfx('portal');onEnterZone(2);}
   p.visX=p.x; p.visY=p.y;
   G.moveDelay=14;
-  autoSave();
 }
 
 function drawWorldHUD(){
@@ -1820,6 +1838,13 @@ function drawWorldHUD(){
     panel(4,404,190,28);
     T('FIELD LAB',10,418,6,'#2050a8');
     T('press A at desk to heal',10,426,4,'#607080');
+  }
+  // Run indicator
+  if(G.running){
+    X.fillStyle='rgba(255,200,50,0.85)';
+    X.fillRect(156,404,50,28);
+    X.strokeStyle='#303848';X.lineWidth=2;X.strokeRect(156,404,50,28);
+    T('RUN',181,422,7,'#303848','center');
   }
 }
 
@@ -1910,13 +1935,274 @@ function recoverAfterWhiteout(){
   G.pcMsg='Dr. Marshall:\nYou fainted out there.\nI patched up your bugs.\nTake a breath before\nyou head back.';
   G.pcMsgTimer=300;
   G.screen='world';
-  autoSave();
 }
 
 // ═══════════════════════════════════════════════
 // BATTLE
 // ═══════════════════════════════════════════════
 const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'}};
+// Draw a bug net (handle + hoop + mesh bag) at position (cx,cy), rotated by angle.
+// cx,cy = centre of the hoop. angle = rotation of the whole tool (0 = handle pointing left).
+function drawBugNet(ctx, cx, cy, angle, meshOpen){
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+
+  // ── Handle (long pole, extends left from hoop) ──
+  const handleLen = 90;
+  ctx.strokeStyle = '#7a4a18';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(-handleLen, 0);
+  ctx.stroke();
+  // Handle highlight stripe
+  ctx.strokeStyle = '#a06828';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-2, -1);
+  ctx.lineTo(-handleLen + 4, -1);
+  ctx.stroke();
+
+  // ── Metal collar where handle meets hoop ──
+  ctx.fillStyle = '#909880';
+  ctx.beginPath();
+  ctx.arc(0, 0, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#b0b898';
+  ctx.beginPath();
+  ctx.arc(-1, -1, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ── Hoop (metal ring) ──
+  const R = 28;
+  ctx.strokeStyle = '#808870';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = '#b0b898';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(-2, -2, R - 1, Math.PI * 1.1, Math.PI * 1.9);
+  ctx.stroke();
+
+  // ── Mesh bag (hangs below/inside hoop) ──
+  // Open mesh = during throw; closed/bunched = bug caught inside
+  const meshDepth = meshOpen ? 32 : 22;
+  const meshColor = 'rgba(220,230,200,0.75)';
+  const meshLineColor = 'rgba(160,175,140,0.85)';
+
+  ctx.save();
+  // Clip to the lower half of the hoop so mesh doesn't poke above
+  ctx.beginPath();
+  ctx.arc(0, 0, R + 2, 0, Math.PI);
+  ctx.closePath();
+  ctx.clip();
+
+  // Bag outline (two curved sides meeting at bottom point)
+  ctx.strokeStyle = meshLineColor;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-R, 0);
+  ctx.quadraticCurveTo(-R * 0.6, meshDepth, 0, meshDepth);
+  ctx.quadraticCurveTo(R * 0.6, meshDepth, R, 0);
+  ctx.stroke();
+
+  // Horizontal mesh lines
+  for(let row = 1; row <= 4; row++){
+    const fy = (row / 5) * meshDepth;
+    // Width of bag narrows toward tip
+    const hw = R * (1 - row / 5.5);
+    ctx.beginPath();
+    ctx.moveTo(-hw, fy);
+    ctx.lineTo(hw, fy);
+    ctx.strokeStyle = meshLineColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  // Vertical mesh lines (6 segments)
+  for(let col = -2; col <= 2; col++){
+    const fx = col * (R / 2.5);
+    ctx.beginPath();
+    ctx.moveTo(fx, 0);
+    ctx.quadraticCurveTo(fx * 0.7, meshDepth * 0.6, fx * 0.4, meshDepth);
+    ctx.strokeStyle = meshLineColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Bag fill (semi-transparent)
+  ctx.beginPath();
+  ctx.moveTo(-R, 0);
+  ctx.quadraticCurveTo(-R * 0.6, meshDepth, 0, meshDepth);
+  ctx.quadraticCurveTo(R * 0.6, meshDepth, R, 0);
+  ctx.closePath();
+  ctx.fillStyle = meshColor;
+  ctx.fill();
+
+  ctx.restore(); // end clip
+  ctx.restore(); // end transform
+}
+
+function drawNetAnim(){
+  // Phases: 'swing'(36f) → 'land'(16f) → 'shake'(22f × N) → 'done'
+  // The net sweeps in from the left (player side), arcing over the wild bug.
+  const na = G.netAnim;
+  na.timer++;
+  const t = na.timer;
+
+  // Wild bug position in battle scene
+  const wildX = 360, wildY = 160;
+
+  if(na.phase === 'throw'){
+    // Net swings in from off-screen left, handle pointing left/back.
+    // Progress 0→1 over 36 frames.
+    const prog = Math.min(1, t / 36);
+    const ease = prog < 0.5 ? 2*prog*prog : -1+(4-2*prog)*prog; // ease in-out
+
+    // Net centre travels from (60, 120) → (wildX, wildY-10) along an arc
+    const startX = 60, startY = 130;
+    const cx = startX + (wildX - startX) * ease;
+    const cy = startY + (wildY - 10 - startY) * ease - Math.sin(ease * Math.PI) * 60;
+
+    // Angle: starts pointing up-left (~-2.2 rad), swings to pointing left (Math.PI)
+    const angle = -2.0 + ease * (Math.PI - (-2.0));
+
+    drawBugNet(X, cx, cy, angle, true);
+
+    G.battleMsg = 'You threw the net!';
+    if(t >= 36){ na.phase = 'land'; na.timer = 0; sfx('catch'); }
+
+  } else if(na.phase === 'land'){
+    // Net settles over the bug with a small bounce
+    const prog = Math.min(1, t / 16);
+    const bounceY = Math.sin(prog * Math.PI) * 8 * (1 - prog);
+    // Handle points straight left (Math.PI) once landed
+    drawBugNet(X, wildX, wildY - 10 + bounceY, Math.PI, false);
+
+    G.battleMsg = 'The net came down!';
+    if(t >= 16){
+      if(na.shakesLeft > 0){ na.phase = 'shake'; na.timer = 0; }
+      else { na.phase = 'done'; na.timer = 0; }
+    }
+
+  } else if(na.phase === 'shake'){
+    // Bug struggles — net rocks side to side
+    const shakeAmt = Math.sin(t * 0.55) * 12 * Math.max(0, 1 - t / 22);
+    const tiltAngle = Math.PI + Math.sin(t * 0.55) * 0.18;
+    drawBugNet(X, wildX + shakeAmt, wildY - 10, tiltAngle, false);
+
+    G.battleMsg = `Shake ${na.shakeCount + 1}...`;
+    if(t >= 22){
+      na.shakeCount++;
+      na.shakesLeft--;
+      na.timer = 0;
+      if(na.shakesLeft > 0){
+        na.phase = 'shake';
+      } else if(na.result){
+        na.phase = 'sparkle'; // caught — play celebration before resolving
+        sfx('caught_jingle');
+      } else {
+        na.phase = 'done';    // escaped
+      }
+    }
+
+  } else if(na.phase === 'sparkle'){
+    // 70-frame sparkle burst over the caught bug
+    const SPARKLE_DUR = 70;
+    const prog = Math.min(1, t / SPARKLE_DUR);
+
+    // Keep net visible, settling slightly
+    drawBugNet(X, wildX, wildY - 10, Math.PI, false);
+
+    // ── Star particle system ──
+    // 12 stars, each with fixed angle+speed seeded by index
+    const STARS = 12;
+    for(let s = 0; s < STARS; s++){
+      const angle = (s / STARS) * Math.PI * 2 + s * 0.3;
+      const speed = 28 + (s % 3) * 14;
+      const delay = (s % 4) * 0.12; // stagger start
+      const localProg = Math.max(0, prog - delay) / (1 - delay);
+      if(localProg <= 0) continue;
+
+      const fade = localProg < 0.6 ? 1 : 1 - (localProg - 0.6) / 0.4;
+      const dist = localProg * speed;
+      const sx = wildX + Math.cos(angle) * dist;
+      const sy = (wildY - 10) + Math.sin(angle) * dist * 0.7; // flatten vertically
+      const sz = (3 - localProg * 1.5) * (1 + s % 2); // size shrinks
+
+      // Hue cycles through gold → white → cyan
+      const hue = (s * 30 + prog * 120) % 360;
+      X.globalAlpha = fade * 0.9;
+      X.fillStyle = `hsl(${hue}, 100%, 75%)`;
+
+      // Draw a 4-point star
+      X.save();
+      X.translate(sx, sy);
+      X.rotate(angle + prog * 3);
+      X.beginPath();
+      for(let p = 0; p < 8; p++){
+        const r = p % 2 === 0 ? sz : sz * 0.4;
+        const a = (p / 8) * Math.PI * 2;
+        p === 0 ? X.moveTo(Math.cos(a)*r, Math.sin(a)*r)
+                : X.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+      }
+      X.closePath();
+      X.fill();
+      X.restore();
+    }
+
+    // ── Flash rings ──
+    if(prog < 0.5){
+      const ringProg = prog / 0.5;
+      X.globalAlpha = (1 - ringProg) * 0.6;
+      X.strokeStyle = '#fff8a0';
+      X.lineWidth = 3;
+      X.beginPath();
+      X.arc(wildX, wildY - 10, ringProg * 55, 0, Math.PI * 2);
+      X.stroke();
+      X.strokeStyle = '#80ffff';
+      X.lineWidth = 2;
+      X.beginPath();
+      X.arc(wildX, wildY - 10, ringProg * 38, 0, Math.PI * 2);
+      X.stroke();
+    }
+
+    X.globalAlpha = 1;
+    G.battleMsg = 'Gotcha!';
+
+    if(t >= SPARKLE_DUR){ na.phase = 'done'; na.timer = 0; }
+
+  } else if(na.phase === 'done'){
+    na.active = false;
+    const wild = G.battle.wild;
+    if(na.result){
+      na.showNet = true; // keep net drawn until battle ends
+      G.battlePhase = 'result';
+      G.pendingAction = 'caught';
+      const bugName = BUGS[wild.id] ? BUGS[wild.id].name : wild.id;
+      G.battleMsg = `Gotcha!\n${bugName} was caught!`;
+      sfx('caught_jingle');
+      G.naming = true;
+      G.nameTarget = {id: wild.id, capturedHp: wild.hp, capturedLevel: wild.level || 1};
+      G.nameStr = '';
+    } else {
+      sfx('catchfail');
+      const er = calcDmg(8, false, wild, G.battleParty[0], null);
+      G.battleParty[0].hp = Math.max(0, G.battleParty[0].hp - er.dmg);
+      G.btFlashP = 20;
+      G.battleMsg = `${dne(G.battle.wild)} broke free!\nHit back for ${er.dmg}!`;
+      G.battlePhase = 'result';
+      G.pendingAction = G.battleParty[0].hp <= 0
+        ? (G.battleParty.some((b,i) => i > 0 && b.hp > 0) ? 'autoswap' : 'lose')
+        : 'continue';
+    }
+  }
+}
+
+
 function drawBattle(){
   const bt=G.battle,bp=G.battleParty,bg=BATZ[typeof G.zone==='number'?G.zone:1];
   if(!bt||!bp.length)return;
@@ -1964,9 +2250,17 @@ function drawBattle(){
       drawTrainerBattleSprite(X, tx, 200, G.battle.trainer.npc.sprite);
     }
   } else {
-    // Wild bug — sits on its platform
+    // Wild bug — sits on its platform, with shake offset during net animation
+    const isSparkle = G.battlePhase==='net_anim' && G.netAnim.phase==='sparkle';
+    const netCaught = G.netAnim.showNet; // bug caught — keep net, hide bug
+    const netShakeOff = (G.battlePhase==='net_anim' && G.netAnim.phase==='shake')
+      ? Math.sin(G.netAnim.timer * 0.55) * 10 * Math.max(0, 1 - G.netAnim.timer / 22) : 0;
     if(G.btFlashE>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashE--;}
-    drawBug(X,bt.wild.id,360,160,3.0);X.globalAlpha=1;
+    if(!isSparkle && !netCaught) drawBug(X,bt.wild.id,360+netShakeOff,160,3.0);
+    X.globalAlpha=1;
+    // Net animation overlay, or persistent net after catch
+    if(G.battlePhase==='net_anim') drawNetAnim();
+    else if(netCaught) drawBugNet(X, 360, 150, Math.PI, false);
   }
 
   // Player bug — raised, well above message box at y=270
@@ -1976,8 +2270,7 @@ function drawBattle(){
   // Wild panel — top right (only when bug is on field)
   if(!isTrainerIntro || G.battlePhase==='bug-in'){
     panel(260,4,198,56,'#f0ece0');
-    const enemyLabel = (G.battle.trainer?'':' Enemy ') + dn(bt.wild);
-    T(G.battle.trainer?dn(bt.wild):`Enemy ${dn(bt.wild)}`,268,20,6,'#303848');
+    T(dn(bt.wild),268,20,6,'#303848');
     T(`Lv.${bt.wild.level||1}`,452,20,6,'#303848','right');
     drawTypeBadge(268,28,bt.wild.type);
     T('HP/',268,52,5,'#607080');HPBAR(298,46,150,bt.wild.hp,bt.wild.maxHp);
@@ -2017,8 +2310,10 @@ function drawBattle(){
       openTrainerReward();
     });
     T('A = next', 14, 420, 5, '#909898');
-  }
-  else if(G.battlePhase==='action'){
+  } else if(G.battlePhase==='net_anim'){
+    panel(0,350,480,82,'#e8e0d0');
+    // No buttons — animation auto-advances
+  } else if(G.battlePhase==='action'){
     panel(0,350,480,82,'#e8e0d0');
     T(`What will ${dn(me)} do?`,14,374,7,'#303848');
     BTN(244,352,114,36,'FIGHT',()=>{sfx('menu');G.battlePhase='move';});
@@ -2157,9 +2452,9 @@ function swapBug(idx){
         t.hp=Math.max(0,t.hp-er.dmg);G.btFlashP=20;
         sfx(ecrit?'crit':'hit');
         const eff=er.typeMult>1?'\nSuper effective!':'';
-        emsg=`${dn(wild)} used ${em}!`+(ecrit?' CRIT!':'')+`\nHit for ${er.dmg}!`+eff;
-      } else { sfx('miss'); emsg=`${dn(wild)} used ${em}!\nMissed!`; }
-    } else { sfx('buff'); emsg=`${dn(wild)} used ${em}!`; }
+        emsg=`${dne(wild)} used ${em}!`+(ecrit?' CRIT!':'')+`\nHit for ${er.dmg}!`+eff;
+      } else { sfx('miss'); emsg=`${dne(wild)} used ${em}!\nMissed!`; }
+    } else { sfx('buff'); emsg=`${dne(wild)} used ${em}!`; }
     G.battleMsg=`Go, ${dn(t)}!\n${emsg}`;
     G.battlePhase='result';
     G.pendingAction=t.hp<=0?(G.battleParty.some((b,i2)=>i2>0&&b.hp>0)?'autoswap':'lose'):'continue';
@@ -2200,8 +2495,10 @@ function doMove(mv){
 
   // ── Per-side attack helpers — return a short result message ──
   function performAttack(attacker, defender, moveName, moveDef, isPlayer){
+    const aName = isPlayer ? dn(attacker) : dne(attacker);
+    const dName = isPlayer ? dne(defender) : dn(defender);
     if(attacker.hp <= 0) return ''; // can't act if KO'd
-    if(!moveDef){ return `${dn(attacker)} used ${moveName}!`; }
+    if(!moveDef){ return `${aName} used ${moveName}!`; }
     if(moveDef.p > 0){
       // Damaging move
       if(Math.random() < moveDef.a){
@@ -2211,20 +2508,20 @@ function doMove(mv){
         if(isPlayer) G.btFlashE = 20; else G.btFlashP = 20;
         sfx(crit ? 'crit' : 'hit');
         const eff = r.typeMult > 1 ? ' SUPER!' : '';
-        return `${dn(attacker)} used ${moveName}!` + (crit ? ' CRIT!' : '') + eff +
+        return `${aName} used ${moveName}!` + (crit ? ' CRIT!' : '') + eff +
                `\nDealt ${r.dmg} dmg.`;
       } else {
         sfx('miss');
-        return `${dn(attacker)} used ${moveName}!\nBut it missed!`;
+        return `${aName} used ${moveName}!\nBut it missed!`;
       }
     } else {
       // Status move
       sfx('buff');
-      if(moveDef.e === 'def+'){ attacker.db = (attacker.db||0)+1; return `${dn(attacker)}'s DEF rose!`; }
-      if(moveDef.e === 'spd+'){ attacker.sb = (attacker.sb||0)+1; return `${dn(attacker)}'s SPD rose!`; }
-      if(moveDef.e === 'evade'){ attacker.ev = (attacker.ev||0)+1; return `${dn(attacker)} got evasive!`; }
-      if(moveDef.e === 'espd-'){ defender.sb = (defender.sb||0)-1; return `${dn(defender)}'s SPD fell!`; }
-      return `${dn(attacker)} used ${moveName}!`;
+      if(moveDef.e === 'def+'){ attacker.db = (attacker.db||0)+1; return `${aName}'s DEF rose!`; }
+      if(moveDef.e === 'spd+'){ attacker.sb = (attacker.sb||0)+1; return `${aName}'s SPD rose!`; }
+      if(moveDef.e === 'evade'){ attacker.ev = (attacker.ev||0)+1; return `${aName} got evasive!`; }
+      if(moveDef.e === 'espd-'){ defender.sb = (defender.sb||0)-1; return `${dName}'s SPD fell!`; }
+      return `${aName} used ${moveName}!`;
     }
   }
 
@@ -2241,7 +2538,7 @@ function doMove(mv){
   if(meFirst){
     line1 = performAttack(me, wild, mv, m, true);
     if(wild.hp <= 0){
-      G.battleMsg = line1 + `\n${dn(wild)} fainted!`;
+      G.battleMsg = line1 + `\n${dne(wild)} fainted!`;
       G.pendingAction = 'win';
       sfx('faint');
       return;
@@ -2258,7 +2555,7 @@ function doMove(mv){
     }
     line2 = performAttack(me, wild, mv, m, true);
     if(wild.hp <= 0){
-      G.battleMsg = line1 + '\n' + line2 + `\n${dn(wild)} fainted!`;
+      G.battleMsg = line1 + '\n' + line2 + `\n${dne(wild)} fainted!`;
       G.pendingAction = 'win';
       sfx('faint');
       return;
@@ -2353,22 +2650,14 @@ function doNet(){
     G.battlePhase='result'; G.pendingAction='continue';
     return;
   }
-  const wild=G.battle.wild,pct=wild.hp/wild.maxHp;
+  const wild=G.battle.wild, pct=wild.hp/wild.maxHp;
   const rate=pct<.25?.90:pct<.5?.60:pct<.75?.28:.07;
-  G.battlePhase='result';
-  if(Math.random()<rate){
-    G.pendingAction='caught';
-    const bugName=BUGS[wild.id]?BUGS[wild.id].name:wild.id;
-    G.battleMsg=`Gotcha!\n${bugName} was caught!`;
-    sfx('catch');
-    G.naming=true;G.nameTarget={id:wild.id,capturedHp:wild.hp,capturedLevel:wild.level||1};G.nameStr='';
-  } else {
-    sfx('catchfail');
-    const er=calcDmg(8,false,wild,G.battleParty[0],null);
-    G.battleParty[0].hp=Math.max(0,G.battleParty[0].hp-er.dmg);G.btFlashP=20;
-    G.battleMsg=`${BUGS[wild.id].name} broke free!\nHit back for ${er.dmg}!`;
-    G.pendingAction=G.battleParty[0].hp<=0?(G.battleParty.some((b,i)=>i>0&&b.hp>0)?'autoswap':'lose'):'continue';
-  }
+  const caught=(Math.random()<rate);
+  // Number of shakes before result (1–3 for caught, 0–2 for escape)
+  const shakes=caught?(1+Math.floor(Math.random()*3)):Math.floor(Math.random()*3);
+  G.netAnim={active:true, timer:0, phase:'throw', result:caught, shakeCount:0, shakesLeft:shakes};
+  G.battlePhase='net_anim';
+  sfx('menu');
 }
 function doRun(){
   if(G.battle.trainer){G.battleMsg=`You can't run\nfrom ${G.battle.trainer.name}!`;G.battlePhase='result';G.pendingAction='continue';return;}
@@ -2404,10 +2693,26 @@ function playerCanTalkToNPC(npc){
 function getTalkNPC(){
   return NPCS.find(n=>n.zone===G.zone&&playerCanTalkToNPC(n));
 }
+function doZAction(){
+  // Z = interact with facing tile/NPC, or rake if standing in water with rake
+  const p=G.player, tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
+  const curTile=gt(G.zone,tx,ty);
+  // Rake if standing in water with the rake equipped
+  if(G.inventory.lakeRake && isWater(curTile)){ doRakeAction(); return; }
+  // Otherwise: interact with facing tile or NPC
+  const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
+  const[ddx,ddy]=dirs[p.dir]||[0,1];
+  const ftile=gt(G.zone,tx+ddx,ty+ddy);
+  if(ftile===11)enterPC();
+  if(ftile===12)exitPC();
+  if(ftile===13)tryTalkDesk();
+  if(interactWithFacingNPC())return;
+}
 function interactWithFacingNPC(){
   const npc=getTalkNPC();
   if(!npc)return false;
   snapPlayerToTile();
+  if(npc.isPig){talkToPig(npc);return true;}
   if(npc.isTrader){talkToBoatman(npc);return true;}
   if(!npc.defeated){triggerTrainerBattle(npc);return true;}
   G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight!'}`;
@@ -2425,11 +2730,11 @@ function openTrainerReward(){
 }
 function endBattle(){
   saveBattleHP();
+  G.netAnim.showNet = false;
   if(G.naming){G.screen='naming';return;}
   if(G.pendingAction==='whiteout'){startWhiteout();return;}
   G.screen='world';
   checkUnlocks();
-  autoSave();
 }
 function checkUnlocks(){
   const z=typeof G.zone==='number'?G.zone:G.prevZone||1;
@@ -2472,7 +2777,6 @@ function confirmName(skip=false){
   G.naming = false; G.nameTarget = null; G.nameStr = '';
   G.screen = 'world';
   checkUnlocks();
-  autoSave();
 }
 
 // ═══════════════════════════════════════════════
@@ -2480,17 +2784,18 @@ function confirmName(skip=false){
 // ═══════════════════════════════════════════════
 function drawMenu(){
   X.fillStyle='#1a1a2a';X.fillRect(0,0,480,432);
-  panel(80,30,320,380,'#f8f8e8');T('MENU',240,60,10,'#303848','center');
-  BTN(112,80,256,40,'BUGDEX',()=>{G.prevScreen='menu';G.screen='bugdex';});
-  BTN(112,128,256,40,'LOADOUT',()=>{G.prevScreen='menu';G.screen='loadout';});
-  BTN(112,176,256,40,'FIELD KIT',()=>{G.prevScreen='menu';G.screen='gear';});
-  BTN(112,224,256,40,'💾 SAVE GAME',()=>{
+  panel(80,30,320,420,'#f8f8e8');T('MENU',240,60,10,'#303848','center');
+  BTN(112,80, 256,40,'BUGDEX',   ()=>{G.prevScreen='menu';G.screen='bugdex';});
+  BTN(112,128,256,40,'LOADOUT',  ()=>{G.prevScreen='menu';G.screen='loadout';});
+  BTN(112,176,256,40,'BAG',      ()=>{G.prevScreen='menu';G.screen='bag';});
+  BTN(112,224,256,40,'FIELD KIT',()=>{G.prevScreen='menu';G.screen='gear';});
+  BTN(112,272,256,40,'💾 SAVE GAME',()=>{
     _saveScreen.mode='save';
     _saveScreen.confirmDelete=null;
     G.screen='title_saves';
   });
-  BTN(112,272,256,40,'BACK TO WORLD',()=>G.screen='world');
-  T('Auto-saves on catch & zone change',240,338,5,'#909898','center');
+  BTN(112,320,256,40,'BACK TO WORLD',()=>G.screen='world');
+  T('Use SAVE GAME in this menu to save your progress.',240,378,5,'#909898','center');
   drawSaveToast();
 }
 
@@ -2581,7 +2886,7 @@ function drawGear(){
       T(opt.label, px+pillW/2, py+pillH/2+4, 5, selected ? '#fff' : '#303848', 'center');
       G.buttons.push({
         x: px, y: py, w: pillW, h: pillH, label: 'gear-'+slot+'-'+opt.id,
-        action: ()=>{ G.gear[slot] = opt.id; sfx('menu'); autoSave(); }
+        action: ()=>{ G.gear[slot] = opt.id; sfx('menu'); }
       });
     });
     yCursor += Math.ceil(opts.length / pillsPerRow) * (pillH + pillGap) + 6;
@@ -2592,9 +2897,58 @@ function drawGear(){
   BTN(160, 398, 150, 24, 'RESET TO DEFAULTS', ()=>{
     G.gear = {hat:'cap', jacket:'red', pants:'jeans', tool:'backpack'};
     sfx('menu');
-    autoSave();
   });
   T('Tap a tile to swap.',  324, 412, 5, '#9098a8', 'center');
+}
+function drawBag(){
+  X.fillStyle='#1a1230'; X.fillRect(0,0,480,432);
+  panel(0,0,480,32,'#f8f8e8');
+  T('BAG',240,22,10,'#303848','center');
+
+  const inv = G.inventory;
+  const items = [
+    {key:'lakeRake',      label:'Lake Weed Rake',   qty: inv.lakeRake ? 1 : 0,     desc:'Press Z (or tap Z on mobile)\nwhile standing in water to rake.',       hasIt: !!inv.lakeRake},
+    {key:'specialMushroom',label:'Mystery Truffle',  qty: inv.specialMushroom||0,   desc:'A truffle sniffed out by the pig.\nSmells... interesting.', hasIt: (inv.specialMushroom||0)>0},
+    {key:'lakeWeed',      label:'Lake Weed',         qty: inv.lakeWeed||0,          desc:'Clumps of pond weed. Maybe useful.',         hasIt: (inv.lakeWeed||0)>0},
+    {key:'shinyRock',     label:'Shiny Rock',        qty: inv.shinyRock||0,         desc:'A smooth glittery rock.',                    hasIt: (inv.shinyRock||0)>0},
+    {key:'scrapMetal',    label:'Scrap Metal',       qty: inv.scrapMetal||0,        desc:'Rusted metal bits from the pond.',           hasIt: (inv.scrapMetal||0)>0},
+  ].filter(it => it.hasIt);
+
+  if(items.length === 0){
+    panel(40, 160, 400, 80, '#f0ece0');
+    T('Your bag is empty.', 240, 196, 7, '#707080', 'center');
+    T('Find items by exploring!', 240, 214, 5, '#909098', 'center');
+  } else {
+    items.forEach((it, i) => {
+      const iy = 42 + i * 72;
+      X.fillStyle = '#e8e4d8'; X.fillRect(8, iy, 464, 64);
+      X.strokeStyle = '#607040'; X.lineWidth=2; X.strokeRect(8, iy, 464, 64);
+
+      // Icon area
+      X.fillStyle = '#c4d8c0'; X.fillRect(12, iy+4, 56, 56);
+      if(it.key==='specialMushroom') drawMushroomSprite(X, 40, iy+38, 0.7);
+      else if(it.key==='lakeRake')   drawRakeSprite(X, 40, iy+36, 0.65);
+      else {
+        X.fillStyle='#809070'; X.fillRect(24,iy+18,28,28);
+        T('?',40,iy+40,10,'#f0f8e8','center');
+      }
+
+      // Text
+      T(it.label, 80, iy+20, 8, '#303848');
+      const qtyStr = it.qty > 1 ? `×${it.qty}` : '';
+      if(qtyStr) T(qtyStr, 464, iy+20, 8, '#303848', 'right');
+      it.desc.split('\n').forEach((l,li)=>T(l, 80, iy+36+li*14, 5, '#607080'));
+
+      // USE button for mushroom
+      if(it.key==='specialMushroom' && it.qty > 0){
+        BTN(360, iy+36, 100, 22, 'EAT →', ()=>{
+          G.pcMsg='(Coming soon...)';G.pcMsgTimer=100;
+        });
+      }
+    });
+  }
+
+  BTN(4,416,120,14,'← BACK',()=>{sfx('menu');G.screen=G.prevScreen||'menu';});
 }
 function drawBugdex(){
   X.fillStyle='#101820';X.fillRect(0,0,480,432);
@@ -2645,7 +2999,6 @@ function moveLoadout(i,dir){
   const tmp=G.loadout[i];
   G.loadout[i]=G.loadout[j];
   G.loadout[j]=tmp;
-  autoSave();
 }
 
 // ═══════════════════════════════════════════════
@@ -2739,7 +3092,6 @@ function drawReward(){
     saveBattleHP();
     G.screen='world';
     checkUnlocks();
-    autoSave();
   });
 }
 
@@ -2754,6 +3106,8 @@ function loop(){
     case 'name_save':   drawNameSave();     break;
     case 'boatman_trade': drawBoatmanTrade(); break;
     case 'item_reward': drawItemReward();   break;
+    case 'mushroom_reward': drawMushroomReward(); break;
+    case 'pig_feed':    drawPigFeedScreen(); break;
     case 'intro':   drawIntro();  break;
     case 'world':   drawWorld();  break;
     case 'battle_transition': drawBattleTransition(); break;
@@ -2766,6 +3120,7 @@ function loop(){
     case 'unlock':  drawUnlock(); break;
     case 'reward':  drawReward(); break;
     case 'gear':    drawGear();   break;
+    case 'bag':     drawBag();    break;
   }
   requestAnimationFrame(loop);
 }
@@ -2789,7 +3144,13 @@ document.addEventListener('keydown',e=>{
       G.saveName=name; saveToSlot(_nameInput.slot); G.screen='world';
     } else if(e.key.length===1&&_nameInput.str.length<14) _nameInput.str+=e.key;
   }
-  if(e.key==='Enter'&&G.screen==='world')openMenuFromWorld();
+  if(e.key==='Enter'&&G.screen==='world'){
+    if(G.pcMsgTimer>0){G.pcMsgTimer=0;return;}
+    openMenuFromWorld();
+  }
+  if((e.key==='z'||e.key==='Z'||e.key==='a'||e.key==='A')&&G.screen==='world'&&G.pcMsgTimer>0){
+    G.pcMsgTimer=0; return;
+  }
   if(e.key==='Enter'&&G.screen==='intro')advanceIntro();
   // B = back in battle move screen
   if((e.key==='b'||e.key==='B')&&G.screen==='battle'&&G.battlePhase==='move'){G.battlePhase='action';}
@@ -2803,16 +3164,7 @@ document.addEventListener('keydown',e=>{
       return;
     }
   }
-  if((e.key==='z'||e.key==='Z')&&G.screen==='world'){
-    // Z = interact
-    const p=G.player,tx=Math.round(p.x/TW),ty=Math.round(p.y/TW);
-    const dirs=[[0,-1],[1,0],[0,1],[-1,0]];const[ddx,ddy]=dirs[p.dir]||[0,1];
-    const ftile=gt(G.zone,tx+ddx,ty+ddy);
-    if(ftile===11)enterPC();
-    if(ftile===12)exitPC();
-    if(ftile===13)tryTalkDesk();
-    if(interactWithFacingNPC())return;
-  }
+  if((e.key==='z'||e.key==='Z')&&G.screen==='world') doZAction();
   if(G.screen==='naming'){
     if(e.key==='Backspace')G.nameStr=G.nameStr.slice(0,-1);
     else if(e.key==='Enter')confirmName();
@@ -2882,6 +3234,8 @@ function setupBtn(id,fn){
   el.addEventListener('click',fn);
 }
 setupBtn('btn-a',()=>{
+  // Dismiss any popup message first
+  if(G.screen==='world'&&G.pcMsgTimer>0){G.pcMsgTimer=0;return;}
   if(G.screen==='intro'){advanceIntro();return;}
   if(G.screen==='battle'){
     if(G.battlePhase==='result'){afterResult();return;}
@@ -2896,21 +3250,37 @@ setupBtn('btn-a',()=>{
   if(G.screen==='unlock'){G.screen='world';return;}
   if(G.screen==='item_reward'){G.screen='world';G.pendingItemReward=null;return;}
   if(G.screen==='world'){
-    const p=G.player,tx=Math.round(p.x/TW),ty=Math.round(p.y/TW);
-    const dirs=[[0,-1],[1,0],[0,1],[-1,0]];const[ddx,ddy]=dirs[p.dir]||[0,1];
-    const ftile=gt(G.zone,tx+ddx,ty+ddy);
-    if(ftile===11){enterPC();return;}
-    if(ftile===12){exitPC();return;}
-    if(ftile===13){tryTalkDesk();return;}
-    if(interactWithFacingNPC())return;
+    doZAction();
   }
+});
+setupBtn('btn-z',()=>{
+  if(G.screen==='world') doZAction();
 });
 setupBtn('btn-b',()=>{
   if(G.screen==='battle'&&G.battlePhase==='move')G.battlePhase='action';
   if(G.screen==='battle'&&G.swapMode)G.swapMode=false;
-  if(G.screen==='bugdex'||G.screen==='loadout')G.screen='menu';
+  if(G.screen==='bugdex'||G.screen==='loadout'||G.screen==='bag')G.screen='menu';
   if(G.screen==='menu')G.screen='world';
+  if(G.screen==='pig_feed')G.screen='world';
 });
+// Hold B on mobile = run in world
+{
+  const bEl = document.getElementById('btn-b');
+  bEl.addEventListener('touchstart', e => {
+    e.preventDefault();
+    bEl.classList.add('pressed');
+    G.keys['_run'] = true;
+  }, {passive: false});
+  bEl.addEventListener('touchend', e => {
+    e.preventDefault();
+    bEl.classList.remove('pressed');
+    delete G.keys['_run'];
+  }, {passive: false});
+  bEl.addEventListener('touchcancel', () => {
+    bEl.classList.remove('pressed');
+    delete G.keys['_run'];
+  });
+}
 setupBtn('btn-menu',()=>{
   if(G.screen==='world')openMenuFromWorld();
   else if(G.screen==='menu')G.screen='world';
@@ -3004,6 +3374,18 @@ function sfx(name){
     case 'heal':   tone(523, 0.1, 'triangle', 0.22, t); tone(659, 0.1, 'triangle', 0.22, t+0.1); tone(784, 0.15, 'triangle', 0.22, t+0.22); break;
     case 'encounter': for(let i=0;i<4;i++){ tone(220+i*60, 0.06, 'sawtooth', 0.22, t+i*0.06); } tone(440, 0.3, 'square', 0.2, t+0.3); break;
     case 'win':    for(let i=0;i<6;i++) tone([523,659,784,1046,784,1046][i], 0.13, 'square', 0.22, t+i*0.1); break;
+    case 'caught_jingle':
+      // Bright celebratory arpeggio — C5 E5 G5 C6, then a shimmer
+      tone(523,  0.10, 'square',   0.20, t);
+      tone(659,  0.10, 'square',   0.20, t+0.10);
+      tone(784,  0.10, 'square',   0.20, t+0.20);
+      tone(1046, 0.18, 'square',   0.22, t+0.30);
+      tone(1319, 0.12, 'triangle', 0.18, t+0.44);
+      tone(1568, 0.14, 'triangle', 0.20, t+0.54);
+      tone(2093, 0.20, 'triangle', 0.18, t+0.65);
+      // Sparkle chime layer
+      for(let i=0;i<6;i++) tone(1047+i*180, 0.06, 'sine', 0.12, t+0.30+i*0.06);
+      break;
     case 'portal': tone(440, 0.08, 'triangle', 0.2, t); tone(660, 0.08, 'triangle', 0.2, t+0.06); tone(880, 0.1, 'triangle', 0.22, t+0.13); break;
   }
 }
@@ -3181,7 +3563,6 @@ function doBoatmanTrade(){
 function finishItemReward(){
   G.screen='world';
   G.pendingItemReward=null;
-  autoSave();
 }
 
 // ═══════════════════════════════════════════════
@@ -3288,7 +3669,6 @@ function doRakeAction(){
     } else {
       G.pcMsg='Nothing here.';G.pcMsgTimer=100;
     }
-    autoSave();
   },600);
 }
 
@@ -3298,6 +3678,273 @@ function onEnterZone(z){
     G.rake.rakedTiles={};
     G.rake.lastZone=2;
   }
+}
+
+// ═══════════════════════════════════════════════
+// PIG NPC — TRUFFLE PIG in Zone 3
+// ═══════════════════════════════════════════════
+const PIG_HOME_TX = 20, PIG_HOME_TY = 20;
+// Pig run path: wanders through mushroom patches then returns home
+const PIG_PATH = [
+  // [dx, dy] offsets from home, in tile units — pig trots through shroom patches
+  [-3,-2],[-5,-4],[-6,-6],[-4,-8],[-2,-6],[0,-4],
+  [2,-6],[4,-8],[6,-5],[5,-3],[3,-1],[1,0],[0,0],
+];
+
+function talkToPig(npc){
+  if(G.pig.searching){
+    G.pcMsg="He's snuffling around\nout there...";
+    G.pcMsgTimer=120;
+    return;
+  }
+  const hasMosquito = G.loadout.some(inst=>inst.id==='mosquito');
+  if(!hasMosquito){
+    if(!G.pig._feeds){
+      G.pcMsg='TRUFFLE PIG:\n"Oink... so hungry.\nBring me a Mosquito Larva\nand I\'ll hunt truffles for you!"';
+    } else {
+      G.pcMsg='TRUFFLE PIG:\n"More Mosquito Larva,\nmore sniffing! Oink!"';
+    }
+    G.pcMsgTimer=200;
+    return;
+  }
+  G.screen='pig_feed';
+}
+
+function doPigFeed(){
+  // Remove one mosquito larva from loadout
+  const idx = G.loadout.findIndex(inst=>inst.id==='mosquito');
+  if(idx===-1) return;
+  G.loadout.splice(idx,1);
+  if(!G.pig._feeds) G.pig._feeds=0;
+  G.pig._feeds++;
+
+  // Set pig home position and start search animation
+  const pigNPC = NPCS.find(n=>n.isPig);
+  G.pig.searching = true;
+  G.pig.timer = 0;
+  G.pig.result = Math.random() < (1/3) ? 'found' : 'empty';
+  G.pig.x = PIG_HOME_TX * TW + TW/2;
+  G.pig.y = PIG_HOME_TY * TW + TW;
+  G.pig.pathIdx = 0;
+  G.moveDelay = 9999; // freeze player during pig search
+  G.screen = 'world';
+  sfx('buff');
+}
+
+// Called every frame from drawWorld when pig.searching is true
+function updatePig(camX, camY){
+  const pig = G.pig;
+  if(!pig.searching) return;
+
+  const TOTAL_FRAMES = 200; // ~3.3 sec at 60fps
+  pig.timer++;
+
+  // Compute pig world position along path
+  const progress = pig.timer / TOTAL_FRAMES;
+  const pathLen = PIG_PATH.length;
+  const pathPos = Math.min(progress * pathLen, pathLen - 1);
+  const pathIdx = Math.floor(pathPos);
+  const pathFrac = pathPos - pathIdx;
+  const a = PIG_PATH[Math.min(pathIdx, pathLen-1)];
+  const b = PIG_PATH[Math.min(pathIdx+1, pathLen-1)];
+  const homeX = PIG_HOME_TX * TW + TW/2;
+  const homeY = PIG_HOME_TY * TW + TW;
+  pig.x = homeX + (a[0] + (b[0]-a[0])*pathFrac) * TW;
+  pig.y = homeY + (a[1] + (b[1]-a[1])*pathFrac) * TW;
+
+  // Running direction for sprite flip
+  const dx = b[0] - a[0];
+  pig.facingLeft = dx < 0;
+
+  // Draw pig at current position
+  const sx = pig.x - camX;
+  const sy = pig.y - camY;
+  drawPigSprite(X, sx, sy, 1, pig.facingLeft, pig.timer);
+
+  // Snuffling dust puffs
+  if(pig.timer % 8 === 0){
+    X.save();
+    X.globalAlpha = 0.5;
+    X.fillStyle = '#c8b898';
+    X.beginPath();
+    X.arc(sx + (Math.random()-0.5)*12, sy + 8, 4 + Math.random()*4, 0, Math.PI*2);
+    X.fill();
+    X.restore();
+  }
+
+  if(pig.timer >= TOTAL_FRAMES){
+    pig.searching = false;
+    G.moveDelay = 0;
+    if(pig.result === 'found'){
+      G.inventory.specialMushroom = (G.inventory.specialMushroom||0) + 1;
+      G.screen = 'mushroom_reward';
+      sfx('caught_jingle');
+    } else {
+      G.pcMsg = 'TRUFFLE PIG:\n"Snuffle snuffle...\nSorry, nothing this time.\nOink."';
+      G.pcMsgTimer = 200;
+      sfx('catchfail');
+    }
+  }
+}
+
+// Pig sprite — pink round pig, little snout, ears, curly tail
+function drawPigSprite(ctx, cx, cy, s, flip, tick){
+  ctx.save();
+  if(flip){ ctx.translate(cx, cy); ctx.scale(-1,1); ctx.translate(-cx,-cy); }
+  const o = cx, t = cy;
+  const run = Math.floor(tick/5)%4; // walk cycle 0-3
+
+  // Body
+  ctx.fillStyle='#f8a8b8';
+  ctx.beginPath(); ctx.ellipse(o, t-10*s, 14*s, 10*s, 0, 0, Math.PI*2); ctx.fill();
+  // Belly
+  ctx.fillStyle='#ffd0dc';
+  ctx.beginPath(); ctx.ellipse(o+2*s, t-8*s, 9*s, 7*s, 0.2, 0, Math.PI*2); ctx.fill();
+
+  // Legs — 2 visible, animate with run cycle
+  const legOffsets = run===1?[2,-2]:run===3?[-2,2]:[0,0];
+  ctx.fillStyle='#f090a8';
+  ctx.fillRect(o-10*s, t-3*s+legOffsets[0]*s, 5*s, 7*s);
+  ctx.fillRect(o+5*s,  t-3*s+legOffsets[1]*s, 5*s, 7*s);
+  // Hooves
+  ctx.fillStyle='#7a4858';
+  ctx.fillRect(o-10*s, t+3*s+legOffsets[0]*s, 5*s, 2*s);
+  ctx.fillRect(o+5*s,  t+3*s+legOffsets[1]*s, 5*s, 2*s);
+
+  // Head
+  ctx.fillStyle='#f8a8b8';
+  ctx.beginPath(); ctx.ellipse(o+16*s, t-14*s, 10*s, 9*s, 0, 0, Math.PI*2); ctx.fill();
+
+  // Snout
+  ctx.fillStyle='#f090a8';
+  ctx.beginPath(); ctx.ellipse(o+24*s, t-13*s, 5*s, 4*s, 0, 0, Math.PI*2); ctx.fill();
+  // Nostrils
+  ctx.fillStyle='#c06070';
+  ctx.beginPath(); ctx.arc(o+22*s, t-14*s, 1.2*s, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o+26*s, t-14*s, 1.2*s, 0, Math.PI*2); ctx.fill();
+
+  // Eye
+  ctx.fillStyle='#1a1010';
+  ctx.beginPath(); ctx.arc(o+18*s, t-18*s, 2*s, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffffff';
+  ctx.beginPath(); ctx.arc(o+19*s, t-19*s, 0.8*s, 0, Math.PI*2); ctx.fill();
+
+  // Ear
+  ctx.fillStyle='#f8a8b8';
+  ctx.beginPath(); ctx.moveTo(o+12*s, t-22*s); ctx.lineTo(o+8*s, t-30*s); ctx.lineTo(o+17*s, t-24*s); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#f090a8';
+  ctx.beginPath(); ctx.moveTo(o+12*s, t-22*s); ctx.lineTo(o+10*s, t-27*s); ctx.lineTo(o+16*s, t-24*s); ctx.closePath(); ctx.fill();
+
+  // Curly tail
+  ctx.strokeStyle='#f090a8'; ctx.lineWidth=2.5*s; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.arc(o-12*s, t-12*s, 4*s, 0.5, 2.8);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(o-15*s, t-10*s, 2*s, 2.5, 0.2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawMushroomReward(){
+  X.fillStyle='#180828'; X.fillRect(0,0,480,432);
+  // Sparkles
+  for(let i=0;i<50;i++){
+    const tt=G.tick*0.4+i*9;
+    const hue=(i*24+G.tick*4)%360;
+    X.fillStyle=`hsl(${hue},90%,70%)`;
+    const sz=(i%3)+1;
+    X.fillRect(((i*83+tt)|0)%480, ((i*53+tt*0.7)|0)%432, sz, sz);
+  }
+  panel(40,40,400,340,'#f8f8e8');
+  T('SPECIAL MUSHROOM!',240,78,9,'#7a2090','center');
+  X.fillStyle='#7a2090'; X.fillRect(56,84,368,3);
+
+  // Draw mushroom sprite centred in panel
+  drawMushroomSprite(X, 240, 180, 3.5);
+
+  T('MYSTERY TRUFFLE',240,248,9,'#303848','center');
+  T('Found by Truffle Pig!',240,268,6,'#7a5090','center');
+  T('Added to your bag.',240,290,6,'#607080','center');
+
+  const mushroomCount = G.inventory.specialMushroom||0;
+  T(`Bag: ${mushroomCount} × Mystery Truffle`,240,316,6,'#303848','center');
+
+  T('(You wonder what it tastes like...)',240,340,5,'#909898','center');
+
+  BTN(160,358,160,30,'✓  NICE!',()=>{
+    sfx('menu');
+    G.screen='world';
+  });
+  T('press A to continue',240,400,5,'#909898','center');
+}
+
+function drawPigFeedScreen(){
+  X.fillStyle='#180828'; X.fillRect(0,0,480,432);
+  // Dark mushroom hollow bg
+  for(let i=0;i<20;i++){
+    X.fillStyle=`hsl(${270+i*3},60%,${15+i%4*3}%)`;
+    X.fillRect(i*26, 380, 26, 52);
+  }
+  panel(40,30,400,340,'#f8f8e8');
+  T('TRUFFLE PIG',240,62,9,'#7a2090','center');
+  X.fillStyle='#7a2090'; X.fillRect(56,68,368,3);
+
+  // Draw pig centred
+  drawPigSprite(X, 200, 200, 1.6, false, G.tick);
+
+  // Dialog bubble
+  panel(230,120,190,100,'#fff8f0');
+  T('"Oink oink!"', 325, 148, 6, '#303848', 'center');
+  T('"Feed me a Mosquito', 325, 168, 5, '#606070', 'center');
+  T('Larva? I\'ll hunt for', 325, 182, 5, '#606070', 'center');
+  T('truffles — promise!"', 325, 196, 5, '#606070', 'center');
+
+  const mosquitoCount = G.loadout.filter(inst=>inst.id==='mosquito').length;
+  T(`You have: ${mosquitoCount} Mosquito Larva`, 240, 278, 6, '#506070', 'center');
+
+  if(mosquitoCount > 0){
+    BTN(80, 300, 148, 36, 'FEED ONE',   ()=>{ doPigFeed(); });
+    BTN(252,300, 148, 36, 'NOT NOW',    ()=>{ G.screen='world'; });
+  } else {
+    BTN(160,300, 160, 36, 'OK',         ()=>{ G.screen='world'; });
+    T('(Catch Mosquito Larva\nin the pond weeds!)', 240, 352, 5, '#808898', 'center');
+  }
+}
+
+function drawMushroomSprite(ctx, cx, cy, s){
+  // Classic red cap mushroom with white spots
+  // Stalk
+  ctx.fillStyle='#f0e8d0';
+  ctx.beginPath(); ctx.ellipse(cx, cy+8*s, 8*s, 5*s, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle='#e8dcc0';
+  ctx.fillRect(cx-7*s, cy-8*s, 14*s, 18*s);
+  ctx.fillStyle='#f0e8d0';
+  ctx.fillRect(cx-6*s, cy-8*s, 12*s, 16*s);
+  // Stalk ring
+  ctx.fillStyle='#d8c8a8';
+  ctx.fillRect(cx-8*s, cy+2*s, 16*s, 3*s);
+  ctx.fillStyle='#e8d8b8';
+  ctx.fillRect(cx-7*s, cy+2*s, 14*s, 2*s);
+  // Cap base (gills)
+  ctx.fillStyle='#c04030';
+  ctx.beginPath(); ctx.ellipse(cx, cy-8*s, 22*s, 7*s, 0, 0, Math.PI*2); ctx.fill();
+  // Cap
+  ctx.fillStyle='#d83020';
+  ctx.beginPath(); ctx.moveTo(cx-22*s, cy-8*s); ctx.quadraticCurveTo(cx, cy-42*s, cx+22*s, cy-8*s); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#e84030';
+  ctx.beginPath(); ctx.moveTo(cx-18*s, cy-10*s); ctx.quadraticCurveTo(cx-4*s, cy-40*s, cx+4*s, cy-38*s); ctx.lineTo(cx-2*s, cy-10*s); ctx.closePath(); ctx.fill();
+  // White spots
+  [[0,-28],[10,-18],[-10,-18],[5,-34],[-6,-32]].forEach(([dx,dy])=>{
+    ctx.fillStyle='#ffffff';
+    ctx.beginPath(); ctx.ellipse(cx+dx*s, cy+dy*s, 4*s, 3.5*s, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.ellipse(cx+(dx-1)*s, cy+(dy-1)*s, 2*s, 1.5*s, 0, 0, Math.PI*2); ctx.fill();
+  });
+  // Purple shimmer on cap (mystery quality)
+  ctx.fillStyle='rgba(180,100,255,0.18)';
+  ctx.beginPath(); ctx.moveTo(cx-22*s, cy-8*s); ctx.quadraticCurveTo(cx, cy-42*s, cx+22*s, cy-8*s); ctx.closePath(); ctx.fill();
 }
 
 const NPCS = [
@@ -3339,6 +3986,8 @@ const NPCS = [
     afterMsg:"...you got better.\nHere — take the pillbug.",
     team:[{id:'fungus',lvl:9},{id:'carrion',lvl:10},{id:'pillbug',lvl:11}],
     rewardId:'pillbug', defeated:false},
+  {zone:3, tx:20, ty:20, dir:3, sprite:'pig', name:'TRUFFLE PIG',
+    isPig:true, defeated:false},
 ];
 function getNPCAt(zone, tx, ty){
   return NPCS.find(n => n.zone===zone && n.tx===tx && n.ty===ty);
@@ -3349,7 +3998,7 @@ function checkNPCLineOfSight(){
   const ptx = Math.round(p.x/TW), pty = Math.round(p.y/TW);
   const SIGHT = 3;
   for(const n of NPCS){
-    if(n.zone !== G.zone || n.defeated || n.isTrader) continue;
+    if(n.zone !== G.zone || n.defeated || n.isTrader || n.isPig) continue;
     const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
     const ndir=n.dir!==undefined?n.dir:2;
     const [dx,dy] = dirs[ndir];
@@ -3390,8 +4039,8 @@ function drawNPCs(ctx, camX, camY){
     const sx = n.tx*TW + TW/2 - camX;
     const sy = n.ty*TW + TW - camY;
     if(sx < -32 || sx > 512 || sy < -32 || sy > 464) return;
-    // Sight cone — traders are conversation-only, so no glowing aggro dots.
-    if(!n.defeated&&!n.isTrader){
+    // Sight cone — traders and pig are conversation-only, no aggro dots.
+    if(!n.defeated&&!n.isTrader&&!n.isPig){
       const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
       const ndir=n.dir!==undefined?n.dir:2;
       const [dx,dy] = dirs[ndir];
@@ -3409,8 +4058,8 @@ function drawNPCs(ctx, camX, camY){
       }
     }
     drawNPCSprite(ctx, sx+(n.drawOffsetX||0), sy+(n.drawOffsetY||0), n.sprite, n.dir!==undefined?n.dir:2, n.defeated);
-    // Exclamation/eye marker if not defeated
-    if(!n.defeated&&!n.isTrader){
+    // Exclamation marker for undefeated trainers (not traders or pig)
+    if(!n.defeated&&!n.isTrader&&!n.isPig){
       const bob = Math.sin(G.tick*0.08 + n.tx)*1.5;
       ctx.fillStyle='#f8e030';
       ctx.fillRect(sx-2, sy-28+bob, 4, 8);
@@ -3418,6 +4067,14 @@ function drawNPCs(ctx, camX, camY){
       ctx.fillStyle='#303848';
       ctx.fillRect(sx-1, sy-27+bob, 2, 6);
       ctx.fillRect(sx-1, sy-17+bob, 2, 2);
+    }
+    // Pig: show a small snout-wiggle indicator when not searching
+    if(n.isPig && !G.pig.searching){
+      const bob = Math.sin(G.tick*0.1 + 1)*1.5;
+      ctx.fillStyle='rgba(255,180,200,0.8)';
+      ctx.beginPath(); ctx.arc(sx, sy-32+bob, 5, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle='#c06070';
+      ctx.beginPath(); ctx.arc(sx, sy-32+bob, 2.5, 0, Math.PI*2); ctx.fill();
     }
   });
 }
@@ -3454,6 +4111,12 @@ function drawSailorNPC(ctx, x, y, dir, dim){
 }
 function drawNPCSprite(ctx, x, y, sprite, dir, dim){
   if(sprite==='sailor'){drawSailorNPC(ctx,x,y,dir,dim);return;}
+  if(sprite==='pig'){
+    if(dim) ctx.globalAlpha=0.7;
+    drawPigSprite(ctx, x, y, 1, dir===3, 0);
+    ctx.globalAlpha=1;
+    return;
+  }
   ctx.save();
   if(dim) ctx.globalAlpha = 0.7;
   // Shadow
