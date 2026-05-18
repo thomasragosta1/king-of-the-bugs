@@ -228,6 +228,9 @@ const G={
     angle:0,          // current run direction
     result:null,      // 'found'|'empty' — set when timer completes
   },
+  truffle:{timer:0,duration:150},
+  dream:{x:40,y:260,vx:0,vy:0,onGround:false,frame:0,phase:'run',climbTimer:0},
+  dreamReturn:{timer:0,duration:120,switched:false},
   // Reward screen
   pendingReward:null, // trainer reward species id
   pendingItemReward:null, // {name, desc} for item reward screen
@@ -252,6 +255,9 @@ const BUGS={
   shroomfly:{name:'SHROOM FLY',   type:'MOLD',    hp:35,atk:14,def:8, spd:20,zone:3, moves:['Spore Cloud','Buzz Cut','Dart','Myco Bite']},
   fungus:  {name:'FUNGUS BEETLE', type:'MOLD',    hp:52,atk:16,def:14,spd:9, zone:3, moves:['Spore Slam','Fungus Bite','Cap Shield','Mold']},
   mosquito:{name:'MOSQUITO LARVA',type:'AQUATIC', hp:30,atk:10,def:6, spd:22,zone:2, rakeOnly:true, moves:['Needle Jab','Quick Dart','Bubble','Spin']},
+  cicada:  {name:'CICADA',         type:'FLYING',  hp:44,atk:15,def:10,spd:21,zone:'high', moves:['Cicada Song','Buzz Dive','Dodge','Gust']},
+  tentcat: {name:'TENT CATERP.',   type:'MOLD',    hp:58,atk:15,def:17,spd:6, zone:'high', moves:['Silk Wrap','Myco Bite','Guard','Smother']},
+  elephant:{name:'ELEPHANT BEETLE',type:'BEETLE',  hp:68,atk:22,def:19,spd:5, zone:'high', moves:['Horn Slam','Iron Shell','Bash','Pincer']},
 };
 // ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
 const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
@@ -269,13 +275,14 @@ const MOVES={
   'Slime Trail':{p:0,a:1,e:'espd-',t:'MOLD'},'Ooze Burst':{p:8,a:.9,t:'MOLD'},'Acid Touch':{p:9,a:.9,t:'MOLD'},'Smother':{p:7,a:1},
   'Spore Cloud':{p:8,a:.95,t:'MOLD'},'Buzz Cut':{p:9,a:.95,t:'FLYING'},'Dart':{p:7,a:1},'Myco Bite':{p:9,a:.9,t:'MOLD'},
   'Spore Slam':{p:10,a:.85,t:'MOLD'},'Fungus Bite':{p:9,a:.9,t:'MOLD'},'Cap Shield':{p:0,a:1,e:'def+',t:'MOLD'},'Mold':{p:8,a:.95,t:'MOLD'},
+  'Cicada Song':{p:9,a:.95,t:'FLYING'},'Silk Wrap':{p:8,a:.95,t:'MOLD'},
 };
 
 // G.loadout: array of instance objects with their own level/xp/hp.
 // G.seen: Set of species ids ever caught (used by Bugdex).
 let _uidCounter = 0;
 function xpForLevel(L){return 8+L*6;} // XP needed to go from L to L+1
-function zoneLevel(z){return z===1?{min:2,max:4}:z===2?{min:4,max:7}:z===3?{min:7,max:10}:{min:2,max:4};}
+function zoneLevel(z){return z===1?{min:2,max:4}:z===2?{min:4,max:7}:z===3?{min:7,max:10}:z==='high'?{min:10,max:14}:{min:2,max:4};}
 function levelStats(id,level){
   const b=BUGS[id], lv=Math.max(1,level||1)-1;
   return{
@@ -731,7 +738,10 @@ function spMosquito(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1)
   // Little fan tail
   DR(c,o,t,3,22,5,2,'#3a5a3a',s);DR(c,o,t,8,22,5,2,'#3a5a3a',s);
   c.restore();}
-const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito};
+function spCicada(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-9*s,t=cy-14*s;DR(c,o,t,4,2,10,22,'#4a4a20',s);DR(c,o,t,2,4,14,14,'#6a6a28',s);DR(c,o,t,3,-2,12,7,'#303020',s);DR(c,o,t,4,-1,4,4,'#e03030',s);DR(c,o,t,11,-1,4,4,'#e03030',s);DR(c,o,t,7,-8,2,7,'#303020',s);DR(c,o,t,11,-8,2,7,'#303020',s);c.fillStyle='rgba(160,255,245,0.55)';c.fillRect(o-9*s,t+2*s,12*s,22*s);c.fillRect(o+15*s,t+2*s,12*s,22*s);c.fillStyle='rgba(255,255,255,0.35)';c.fillRect(o-7*s,t+4*s,8*s,4*s);c.fillRect(o+17*s,t+4*s,8*s,4*s);DR(c,o,t,-3,12,7,2,'#303020',s);DR(c,o,t,14,12,7,2,'#303020',s);c.restore();}
+function spTentcat(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-16*s,t=cy-8*s;for(let i=0;i<5;i++){DR(c,o,t,i*6,6+Math.sin(G.tick*.08+i)*2,8,10,i%2?'#d8f0f8':'#f0f8ff',s);DR(c,o,t,i*6,13+Math.sin(G.tick*.08+i)*2,8,4,'#90d8f0',s);}DR(c,o,t,28,4,10,12,'#f8f8f0',s);DR(c,o,t,30,6,3,3,'#302030',s);DR(c,o,t,35,6,3,3,'#302030',s);for(let i=0;i<6;i++){DR(c,o,t,i*6+1,16,3,4,'#80c8d8',s);DR(c,o,t,i*6+4,16,3,4,'#80c8d8',s);}c.fillStyle='rgba(255,255,255,0.45)';c.fillRect(o-2*s,t+2*s,40*s,5*s);c.restore();}
+function spElephant(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-15*s,t=cy-12*s;DR(c,o,t,2,8,28,16,'#1c1720',s);DR(c,o,t,4,5,24,18,'#282030',s);DR(c,o,t,10,0,14,9,'#201828',s);DR(c,o,t,12,2,4,4,'#e04040',s);DR(c,o,t,20,2,4,4,'#e04040',s);DR(c,o,t,15,-9,5,12,'#201828',s);DR(c,o,t,12,-12,11,5,'#201828',s);DR(c,o,t,9,-15,6,4,'#201828',s);DR(c,o,t,21,-15,6,4,'#201828',s);DR(c,o,t,12,13,18,4,'#544070',s);DR(c,o,t,-5,11,8,3,'#1a1420',s);DR(c,o,t,29,11,8,3,'#1a1420',s);DR(c,o,t,-8,14,7,3,'#1a1420',s);DR(c,o,t,34,14,7,3,'#1a1420',s);DR(c,o,t,6,22,5,5,'#101018',s);DR(c,o,t,21,22,5,5,'#101018',s);c.restore();}
+const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito,cicada:spCicada,tentcat:spTentcat,elephant:spElephant};
 function drawBug(ctx,id,cx,cy,s=1,flip=false){if(SFN[id])SFN[id](ctx,cx,cy,s,flip);}
 
 // ── PLAYER SPRITE ──────────────────────────────
@@ -1059,6 +1069,7 @@ function drawTypeBadge(x,y,t){
 // Tile codes: 0=floor 1=grass 2=wall/tree 3=unused
 // 4=path 5=PCbuilding(solid) 6=portal 7=pond 9=shrooms
 // 11=PCdoor(enter) 12=PCexit 13=PCdesk 14=PCfloor 15=PCcounter
+// 21=treetop 22=sky bridge 23=dream bed 24=lab bed 25=open sky
 // ═══════════════════════════════════════════════
 const TW=16,TALL=27,WIDE=30;
 const MAPS={};
@@ -1106,6 +1117,17 @@ function buildMap(z){
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=2;
     });
     m[1][14]=6;m[1][15]=6;
+  } else if(z==='high'){
+    for(let y=0;y<TALL;y++)for(let x=0;x<WIDE;x++)m[y][x]=25;
+    const crowns=[[3,16,7,5],[12,12,7,5],[21,15,6,5],[6,7,6,4],[17,6,7,4]];
+    crowns.forEach(([sx,sy,w,h])=>{
+      for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=21;
+    });
+    [[9,17,13],[18,14,21],[11,9,17]].forEach(([x1,y,x2])=>{
+      for(let x=x1;x<=x2;x++)m[y][x]=22;
+    });
+    for(let y=10;y<22;y+=3){m[y][5]=22;m[y][6]=22;}
+    m[15][24]=23;
   } else if(z==='pc'){
     // ── Pokemon Center Interior ──
     // 14 wide x 12 tall room, centered
@@ -1135,6 +1157,8 @@ function buildMap(z){
     m[deskRow][OX+W2-4]=17;m[deskRow][OX+W2-3]=17;
     // Interact desk tiles (in front of counter, row deskRow+1)
     for(let x=OX+4;x<=OX+W2-5;x++)m[deskRow+1][x]=13;
+    // Dr. Marshall keeps one ordinary lab bed here. It is only for waking up.
+    m[OY+H2-3][OX+2]=24;m[OY+H2-3][OX+3]=24;
   }
   return m;
 }
@@ -1145,8 +1169,8 @@ function gt(z,tx,ty){
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20;}
-function isEncounter(t){return t===1||t===7||t===9;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25;}
+function isEncounter(t){return t===1||t===7||t===9||t===21;}
 function isWater(t){return t===7;}
 
 // ═══════════════════════════════════════════════
@@ -1258,6 +1282,36 @@ function drawTile(tile,sx,sy,tx,ty){
       if(!hasLeft){X.fillStyle='#f8f8f0';X.fillRect(sx+1,sy+9+bp,3,4);}
       if(!hasRight){X.fillStyle='#f8f8f0';X.fillRect(sx+12,sy+9+bp,3,4);}
       X.fillStyle='rgba(120,160,200,0.3)';X.fillRect(sx+2,sy+15+bp,12,3);
+      break;}
+    case 21: { // saturated cloud-treetop encounter tile
+      X.fillStyle='#72f0ff';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#30e068';X.fillRect(sx,sy+5,TW,11);
+      X.fillStyle='#ffe040';X.fillRect(sx+1,sy+2,14,5);
+      X.fillStyle='#ff4bd8';X.fillRect(sx+2,sy+7,12,4);
+      X.fillStyle='#ffffff';X.fillRect(sx+3,sy+1,10,3);
+      X.fillStyle='rgba(0,80,120,0.25)';X.fillRect(sx,sy+14,TW,2);
+      break;}
+    case 22: { // rope bridge between crowns
+      X.fillStyle='#7be8ff';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='rgba(255,255,255,0.55)';X.fillRect(sx+1,sy+2,14,4);
+      X.fillStyle='#c07830';X.fillRect(sx,sy+6,TW,3);X.fillRect(sx,sy+12,TW,3);
+      X.fillStyle='#ffe070';X.fillRect(sx+2,sy+7,3,7);X.fillRect(sx+10,sy+7,3,7);
+      break;}
+    case 23: { // treetop bed back down to the lab
+      X.fillStyle='#30e068';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#7840e8';X.fillRect(sx+1,sy+7,14,7);
+      X.fillStyle='#ff70d8';X.fillRect(sx+3,sy+4,10,4);
+      X.fillStyle='#fff8b0';X.fillRect(sx+2,sy+11,12,3);
+      break;}
+    case 24: { // field lab bed
+      X.fillStyle='#e4e4e0';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#6090d0';X.fillRect(sx+1,sy+6,14,8);
+      X.fillStyle='#f8f8f0';X.fillRect(sx+2,sy+3,7,5);
+      X.fillStyle='#405080';X.fillRect(sx+1,sy+13,14,2);
+      break;}
+    case 25: { // open sky void in high zone
+      X.fillStyle='#6ee8ff';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='rgba(255,255,255,0.25)';X.fillRect(sx+((tx+ty)%4),sy+4,10,2);
       break;}
     case 9: // mushroom field
       X.fillStyle='#301828';X.fillRect(sx,sy,TW,TW);
@@ -1599,7 +1653,7 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 // WORLD DRAW
 // ═══════════════════════════════════════════════
-const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',pc:'ENTOMOLOGY DEPT'};
+const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT'};
 
 function snapPlayerToTile(){
   const p=G.player;
@@ -1647,6 +1701,7 @@ function drawWorld(){
         if(tile===11)enterPC();      // walk into PC door
         if(tile===12)exitPC();       // walk out of PC
         if(tile===13)tryTalkDesk();  // interact tile in front of desk
+        if(tile===23)startDreamReturn();
         // Trainer line-of-sight check after every successful move
         if(G.screen==='world') checkNPCLineOfSight();
       }
@@ -1677,7 +1732,14 @@ function drawWorld(){
   } else if(G.zone===2){
     X.fillStyle='#4888b8';X.fillRect(0,0,480,432);
   } else {
-    X.fillStyle='#180828';X.fillRect(0,0,480,432);
+    X.fillStyle=G.zone==='high'?'#6ee8ff':'#180828';X.fillRect(0,0,480,432);
+    if(G.zone==='high'){
+      for(let i=0;i<10;i++){
+        X.fillStyle=i%2?'rgba(255,255,255,0.45)':'rgba(255,255,140,0.28)';
+        X.fillRect(((i*91-G.tick*0.4)%560)-80,34+i*36,92,14);
+        X.fillRect(((i*91-G.tick*0.4)%560)-64,26+i*36,46,18);
+      }
+    }
   }
 
   // Tiles
@@ -1778,7 +1840,7 @@ function tryTalkDesk(){
 
 function startBattleTransition(){
   snapPlayerToTile();
-  G.battleTransition={timer:0,duration:24,fromZone:typeof G.zone==='number'?G.zone:(G.prevZone||1)};
+  G.battleTransition={timer:0,duration:24,fromZone:G.zone};
   G.screen='battle_transition';
 }
 
@@ -1827,7 +1889,7 @@ function drawWorldHUD(){
   // Bottom-left: zone name + caught count
   if(G.zone!=='pc'){
     const zName=ZN[G.zone]||'';
-    const zBugs=typeof G.zone==='number'?Object.keys(BUGS).filter(k=>BUGS[k].zone===G.zone):[];
+    const zBugs=Object.keys(BUGS).filter(k=>BUGS[k].zone===G.zone);
     const zC=zBugs.filter(k=>G.seen.has(k)).length;
     const catchStr=zBugs.length?`Caught: ${zC}/${zBugs.length}`:'';
     const panelW=148;
@@ -1940,7 +2002,7 @@ function recoverAfterWhiteout(){
 // ═══════════════════════════════════════════════
 // BATTLE
 // ═══════════════════════════════════════════════
-const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'}};
+const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'}};
 // Draw a bug net (handle + hoop + mesh bag) at position (cx,cy), rotated by angle.
 // cx,cy = centre of the hoop. angle = rotation of the whole tool (0 = handle pointing left).
 function drawBugNet(ctx, cx, cy, angle, meshOpen){
@@ -2204,7 +2266,7 @@ function drawNetAnim(){
 
 
 function drawBattle(){
-  const bt=G.battle,bp=G.battleParty,bg=BATZ[typeof G.zone==='number'?G.zone:1];
+  const bt=G.battle,bp=G.battleParty,bg=BATZ[G.zone]||BATZ[1];
   if(!bt||!bp.length)return;
   const me=bp[0];G.btTick++;
   // Background - taller sky, shorter ground so bugs have more room
@@ -2693,12 +2755,12 @@ function playerCanTalkToNPC(npc){
 function getTalkNPC(){
   return NPCS.find(n=>n.zone===G.zone&&playerCanTalkToNPC(n));
 }
-function doZAction(){
+function doZAction(allowRake=true){
   // Z = interact with facing tile/NPC, or rake if standing in water with rake
   const p=G.player, tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
   const curTile=gt(G.zone,tx,ty);
   // Rake if standing in water with the rake equipped
-  if(G.inventory.lakeRake && isWater(curTile)){ doRakeAction(); return; }
+  if(allowRake && G.inventory.lakeRake && isWater(curTile)){ doRakeAction(); return; }
   // Otherwise: interact with facing tile or NPC
   const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
   const[ddx,ddy]=dirs[p.dir]||[0,1];
@@ -2731,10 +2793,12 @@ function openTrainerReward(){
 function endBattle(){
   saveBattleHP();
   G.netAnim.showNet = false;
+  const beatNpc=!!(G.battle&&G.battle.trainer&&G.battle.trainer.npc&&G.battle.trainer.npc.defeated);
   if(G.naming){G.screen='naming';return;}
   if(G.pendingAction==='whiteout'){startWhiteout();return;}
   G.screen='world';
   checkUnlocks();
+  if(beatNpc)autoSave();
 }
 function checkUnlocks(){
   const z=typeof G.zone==='number'?G.zone:G.prevZone||1;
@@ -2900,6 +2964,26 @@ function drawGear(){
   });
   T('Tap a tile to swap.',  324, 412, 5, '#9098a8', 'center');
 }
+function drawItemSprite(ctx,key,cx,cy,s=1){
+  ctx.save();
+  if(key==='specialMushroom'){drawMushroomSprite(ctx,cx,cy,s);ctx.restore();return;}
+  if(key==='lakeRake'){drawRakeSprite(ctx,cx,cy,s);ctx.restore();return;}
+  if(key==='lakeWeed'){
+    ctx.fillStyle='#2f8c38';ctx.fillRect(cx-10*s,cy-10*s,5*s,22*s);ctx.fillRect(cx-1*s,cy-12*s,5*s,24*s);ctx.fillRect(cx+8*s,cy-9*s,5*s,20*s);
+    ctx.fillStyle='#73f05a';ctx.fillRect(cx-9*s,cy-12*s,4*s,8*s);ctx.fillRect(cx,cy-15*s,4*s,9*s);ctx.fillRect(cx+9*s,cy-11*s,4*s,7*s);
+    ctx.fillStyle='rgba(80,180,255,0.45)';ctx.fillRect(cx-14*s,cy+8*s,30*s,5*s);
+  } else if(key==='shinyRock'){
+    ctx.fillStyle='#6070a0';ctx.fillRect(cx-12*s,cy-6*s,24*s,14*s);
+    ctx.fillStyle='#98b8ff';ctx.fillRect(cx-8*s,cy-10*s,18*s,9*s);
+    ctx.fillStyle='#ffffff';ctx.fillRect(cx-3*s,cy-8*s,6*s,3*s);ctx.fillRect(cx+5*s,cy-3*s,3*s,3*s);
+    ctx.fillStyle='#405078';ctx.fillRect(cx-11*s,cy+7*s,22*s,3*s);
+  } else if(key==='scrapMetal'){
+    ctx.fillStyle='#805030';ctx.fillRect(cx-13*s,cy-7*s,26*s,6*s);ctx.fillRect(cx-8*s,cy-1*s,20*s,10*s);
+    ctx.fillStyle='#b0a090';ctx.fillRect(cx-9*s,cy-9*s,16*s,4*s);ctx.fillRect(cx-3*s,cy-2*s,15*s,4*s);
+    ctx.fillStyle='#e0d8c0';ctx.fillRect(cx+4*s,cy-8*s,4*s,3*s);
+  }
+  ctx.restore();
+}
 function drawBag(){
   X.fillStyle='#1a1230'; X.fillRect(0,0,480,432);
   panel(0,0,480,32,'#f8f8e8');
@@ -2926,12 +3010,7 @@ function drawBag(){
 
       // Icon area
       X.fillStyle = '#c4d8c0'; X.fillRect(12, iy+4, 56, 56);
-      if(it.key==='specialMushroom') drawMushroomSprite(X, 40, iy+38, 0.7);
-      else if(it.key==='lakeRake')   drawRakeSprite(X, 40, iy+36, 0.65);
-      else {
-        X.fillStyle='#809070'; X.fillRect(24,iy+18,28,28);
-        T('?',40,iy+40,10,'#f0f8e8','center');
-      }
+      drawItemSprite(X,it.key,40,iy+38,it.key==='lakeRake'?0.65:0.72);
 
       // Text
       T(it.label, 80, iy+20, 8, '#303848');
@@ -2942,7 +3021,7 @@ function drawBag(){
       // USE button for mushroom
       if(it.key==='specialMushroom' && it.qty > 0){
         BTN(360, iy+36, 100, 22, 'EAT →', ()=>{
-          G.pcMsg='(Coming soon...)';G.pcMsgTimer=100;
+          eatMysteryTruffle();
         });
       }
     });
@@ -3092,6 +3171,7 @@ function drawReward(){
     saveBattleHP();
     G.screen='world';
     checkUnlocks();
+    autoSave();
   });
 }
 
@@ -3108,6 +3188,9 @@ function loop(){
     case 'item_reward': drawItemReward();   break;
     case 'mushroom_reward': drawMushroomReward(); break;
     case 'pig_feed':    drawPigFeedScreen(); break;
+    case 'truffle_transition': drawTruffleTransition(); break;
+    case 'dream_runner': drawDreamRunner(); break;
+    case 'dream_return': drawDreamReturnFade(); break;
     case 'intro':   drawIntro();  break;
     case 'world':   drawWorld();  break;
     case 'battle_transition': drawBattleTransition(); break;
@@ -3132,6 +3215,7 @@ loop();
 document.addEventListener('keydown',e=>{
   G.keys[e.key]=true;
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+  if(G.screen==='dream_runner'&&(e.key===' '||e.key==='ArrowUp'||e.key==='w'||e.key==='W'))dreamJump();
   if(e.key==='Enter'&&G.screen==='title'){
     // Enter on title starts new game if no saves, else goes to load screen
     if([0,1,2].some(n=>getSlotInfo(n))){_saveScreen.mode='load';G.screen='title_saves';}
@@ -3235,6 +3319,7 @@ function setupBtn(id,fn){
 }
 setupBtn('btn-a',()=>{
   // Dismiss any popup message first
+  if(G.screen==='dream_runner'){dreamJump();return;}
   if(G.screen==='world'&&G.pcMsgTimer>0){G.pcMsgTimer=0;return;}
   if(G.screen==='intro'){advanceIntro();return;}
   if(G.screen==='battle'){
@@ -3250,7 +3335,7 @@ setupBtn('btn-a',()=>{
   if(G.screen==='unlock'){G.screen='world';return;}
   if(G.screen==='item_reward'){G.screen='world';G.pendingItemReward=null;return;}
   if(G.screen==='world'){
-    doZAction();
+    doZAction(false);
   }
 });
 setupBtn('btn-z',()=>{
@@ -3612,9 +3697,7 @@ function drawRakeSprite(ctx,cx,cy,s){
 // ═══════════════════════════════════════════════
 // RAKE ACTION — used in water tiles in zone 2
 // ═══════════════════════════════════════════════
-const RAKE_RESULTS=['lakeweed','shinyrock','mosquito_battle','scrap'];
-// Raking: 1-in-4 chance to find something, otherwise nothing here.
-const RAKE_FIND_CHANCE=0.25;
+const RAKE_RESULTS=['lakeweed','shinyrock','mosquito_battle','scrap','nothing'];
 
 function doRakeAction(){
   if(!G.inventory.lakeRake) return;
@@ -3632,11 +3715,8 @@ function doRakeAction(){
   // Trigger rake animation
   G.rake.anim=40;
 
-  // Pick a result: 75% nothing, 25% one random rake find.
-  let result='nothing';
-  if(Math.random()<RAKE_FIND_CHANCE){
-    result=RAKE_RESULTS[Math.floor(Math.random()*RAKE_RESULTS.length)];
-  }
+  // Five equal rake outcomes, so Mosquito Larva is a 1-in-5 result.
+  const result=RAKE_RESULTS[Math.floor(Math.random()*RAKE_RESULTS.length)];
 
   setTimeout(()=>{
     if(result==='lakeweed'){
@@ -3947,6 +4027,145 @@ function drawMushroomSprite(ctx, cx, cy, s){
   ctx.beginPath(); ctx.moveTo(cx-22*s, cy-8*s); ctx.quadraticCurveTo(cx, cy-42*s, cx+22*s, cy-8*s); ctx.closePath(); ctx.fill();
 }
 
+function eatMysteryTruffle(){
+  if((G.inventory.specialMushroom||0)<=0)return;
+  G.inventory.specialMushroom--;
+  G.truffle={timer:0,duration:150};
+  G.keys={};
+  G.screen='truffle_transition';
+  sfx('buff');
+}
+function drawTruffleTransition(){
+  const tr=G.truffle||{timer:0,duration:150};
+  const p=Math.min(1,tr.timer/tr.duration);
+  X.fillStyle='#120020';X.fillRect(0,0,480,432);
+  X.save();
+  X.translate(240,216);
+  X.rotate(p*Math.PI*10);
+  for(let i=0;i<54;i++){
+    const a=i/54*Math.PI*2+p*8;
+    const r=12+i*7+p*180;
+    X.fillStyle=`hsl(${(i*31+G.tick*7)%360},100%,${55+(i%4)*8}%)`;
+    X.fillRect(Math.cos(a)*r-18,Math.sin(a)*r-18,36,36);
+  }
+  X.restore();
+  for(let i=0;i<18;i++){
+    X.fillStyle=`hsl(${(G.tick*12+i*44)%360},100%,70%)`;
+    X.fillRect((Math.sin(G.tick*.04+i)*230+240)|0,(Math.cos(G.tick*.05+i*2)*190+216)|0,8+(i%4)*5,8+(i%3)*5);
+  }
+  drawMushroomSprite(X,240,216,1.4+Math.sin(G.tick*.2)*0.25);
+  T('MYSTERY TRUFFLE',240,348,9,'#fff8b0','center');
+  T('the room folds sideways...',240,374,6,'#ffffff','center');
+  tr.timer++;
+  G.truffle=tr;
+  if(tr.timer>=tr.duration)startDreamRunner();
+}
+const DREAM_PLATFORMS=[
+  {x:0,y:340,w:280,h:28},{x:340,y:302,w:150,h:22},{x:550,y:262,w:135,h:22},
+  {x:745,y:310,w:160,h:22},{x:980,y:270,w:170,h:22},{x:1225,y:226,w:130,h:22},
+  {x:1410,y:286,w:170,h:22},{x:1650,y:328,w:230,h:28}
+];
+function startDreamRunner(){
+  G.dream={x:40,y:260,vx:0,vy:0,onGround:false,frame:0,phase:'run',climbTimer:0};
+  G.keys={};
+  G.screen='dream_runner';
+}
+function dreamJump(){
+  if(G.screen==='dream_runner'&&G.dream.onGround&&G.dream.phase==='run'){
+    G.dream.vy=-8.2;
+    G.dream.onGround=false;
+    sfx('jump');
+  }
+}
+function drawDreamRunner(){
+  const d=G.dream;
+  if(d.phase==='run'){
+    const left=G.keys['ArrowLeft']||G.keys['a']||G.keys['A'];
+    const right=G.keys['ArrowRight']||G.keys['d']||G.keys['D'];
+    if(G.keys['ArrowUp']||G.keys['w']||G.keys['W']||G.keys[' '])dreamJump();
+    d.vx=(right?3.1:0)-(left?3.1:0);
+    d.vy=Math.min(10,d.vy+0.42);
+    d.x+=d.vx;
+    d.y+=d.vy;
+    d.onGround=false;
+    DREAM_PLATFORMS.forEach(pl=>{
+      const px=d.x,py=d.y;
+      if(px+7>pl.x&&px-7<pl.x+pl.w&&py+13>=pl.y&&py+13<=pl.y+pl.h+10&&d.vy>=0){
+        d.y=pl.y-13;d.vy=0;d.onGround=true;
+      }
+    });
+    if(d.y>520){d.x=40;d.y=260;d.vx=0;d.vy=0;}
+    if(d.x<0)d.x=0;
+    if(d.x>1745&&d.onGround){d.phase='climb';d.climbTimer=0;d.vx=0;d.vy=0;sfx('portal');}
+    if(Math.abs(d.vx)>0.1)d.frame++;
+  } else {
+    d.climbTimer++;
+    d.y-=1.25;
+    d.frame++;
+    if(d.climbTimer>96)enterHighBiome();
+  }
+  const cam=Math.max(0,Math.min(1420,d.x-170));
+  const grad=X.createLinearGradient(0,0,0,432);
+  grad.addColorStop(0,'#ff4bd8');grad.addColorStop(.35,'#48f8ff');grad.addColorStop(.7,'#fff050');grad.addColorStop(1,'#7bff40');
+  X.fillStyle=grad;X.fillRect(0,0,480,432);
+  for(let i=0;i<36;i++){
+    X.fillStyle=`hsl(${(G.tick*5+i*17)%360},100%,${45+(i%5)*9}%)`;
+    X.fillRect(((i*71-G.tick*2-cam*.3)%560)-40,38+(i*29)%330,34+(i%4)*10,8+(i%3)*8);
+  }
+  DREAM_PLATFORMS.forEach((pl,i)=>{
+    const sx=pl.x-cam;
+    X.fillStyle=i%2?'#ff7a18':'#31e85d';X.fillRect(sx,pl.y,pl.w,pl.h);
+    X.fillStyle=i%2?'#fff050':'#ff40d8';X.fillRect(sx,pl.y,pl.w,5);
+    X.fillStyle='rgba(0,0,0,0.18)';X.fillRect(sx,pl.y+pl.h-4,pl.w,4);
+  });
+  const treeX=1810-cam;
+  X.fillStyle='#7a3a18';X.fillRect(treeX-26,80,52,288);
+  X.fillStyle='#b86020';X.fillRect(treeX-12,80,12,288);
+  for(let i=0;i<6;i++){X.fillStyle=`hsl(${110+i*35},100%,55%)`;X.fillRect(treeX-76+i*25,62+i%2*16,82,42);}
+  T('CLIMB',treeX,66,7,'#ffffff','center');
+  drawPlayer(X,d.x-cam,d.y,2,d.frame,false);
+  panel(10,10,300,42,'#f8f8e8');
+  T('TRUFFLE DREAM',24,29,7,'#303848');
+  T('Run, jump, reach the tree.',24,46,5,'#607080');
+}
+function enterHighBiome(){
+  G.zone='high';resetMap('high');
+  G.player.x=5*TW;G.player.y=17*TW;G.player.dir=2;
+  G.player.visX=G.player.x;G.player.visY=G.player.y;
+  G.moveDelay=12;
+  G.pcMsg='You scramble into\nHIGH, HIGH, HIGH.\nEverything is very bright.';
+  G.pcMsgTimer=260;
+  G.screen='world';
+}
+function startDreamReturn(){
+  G.dreamReturn={timer:0,duration:120,switched:false};
+  G.keys={};
+  G.screen='dream_return';
+}
+function drawDreamReturnFade(){
+  const dr=G.dreamReturn||{timer:0,duration:120,switched:false};
+  const half=dr.duration/2;
+  if(dr.timer>=half&&!dr.switched){
+    dr.switched=true;
+    G.prevZone=1;
+    G.zone='pc';resetMap('pc');
+    G.player.x=9*TW;G.player.y=17*TW;G.player.dir=2;
+    G.player.visX=G.player.x;G.player.visY=G.player.y;
+    G.pcMsg='You wake up in the lab.\nWow... that was a\ncrazy dream.';
+    G.pcMsgTimer=300;
+  }
+  if(dr.switched)drawWorld();
+  else {
+    X.fillStyle='#6ee8ff';X.fillRect(0,0,480,432);
+    T('curling up in the cloud bed...',240,210,7,'#303848','center');
+  }
+  const a=dr.timer<half?dr.timer/half:1-(dr.timer-half)/half;
+  X.fillStyle=`rgba(0,0,0,${Math.max(0,Math.min(1,a))})`;X.fillRect(0,0,480,432);
+  dr.timer++;
+  G.dreamReturn=dr;
+  if(dr.timer>=dr.duration)G.screen='world';
+}
+
 const NPCS = [
   // ── Zone 1 ──
   {zone:1, tx:7, ty:18, dir:2, sprite:'kid',  name:'BUG KID PIP',
@@ -4036,6 +4255,7 @@ function triggerTrainerBattle(npc){
 // ── Render NPCs in world ──
 function drawNPCs(ctx, camX, camY){
   NPCS.filter(n => n.zone === G.zone).forEach(n => {
+    if(n.isPig && G.pig.searching) return;
     const sx = n.tx*TW + TW/2 - camX;
     const sy = n.ty*TW + TW - camY;
     if(sx < -32 || sx > 512 || sy < -32 || sy > 464) return;
