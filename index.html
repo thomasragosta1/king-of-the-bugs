@@ -204,14 +204,17 @@ const G={
   battleTransition:{timer:0,duration:24,fromZone:1},
   whiteout:{timer:0,duration:90},
   btFlashP:0, btFlashE:0, btTick:0, swapMode:false,
+  attackAnims:[],
   netAnim:{active:false, timer:0, phase:'throw', result:null, shakeCount:0, shakesLeft:0},
+  moveLearn:null, moveLearnQueue:[],
   prevScreen:'world',
   unlockMsg:'', hovered:null, buttons:[],
   naming:false, nameTarget:null, nameStr:'',
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0},
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0},
+  fruitTrees:{checked:{}},
   // Rake system
   rake:{
     anim:0,         // animation frame counter (>0 = animating)
@@ -260,6 +263,8 @@ const BUGS={
   cicada:  {name:'CICADA',         type:'FLYING',  hp:44,atk:15,def:10,spd:21,zone:'high', moves:['Cicada Song','Buzz Dive','Dodge','Gust']},
   tentcat: {name:'TENT CATERP.',   type:'MOLD',    hp:58,atk:15,def:17,spd:6, zone:'high', moves:['Silk Wrap','Myco Bite','Guard','Smother']},
   elephant:{name:'ELEPHANT BEETLE',type:'BEETLE',  hp:68,atk:22,def:19,spd:5, zone:'high', moves:['Horn Slam','Iron Shell','Bash','Pincer']},
+  cocoon:  {name:'COCOON',         type:'MOLD',    hp:42,atk:6, def:20,spd:1, zone:1, fruitOnly:true, moves:['Wiggle']},
+  monarch: {name:'MONARCH',        type:'FLYING',  hp:48,atk:17,def:9, spd:24,zone:1, fruitOnly:true, moves:['Wing Gale','Milkweed Dust','Sunbeam','Migration Rush']},
 };
 // ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
 const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
@@ -278,6 +283,21 @@ const MOVES={
   'Spore Cloud':{p:8,a:.95,t:'MOLD'},'Buzz Cut':{p:9,a:.95,t:'FLYING'},'Dart':{p:7,a:1},'Myco Bite':{p:9,a:.9,t:'MOLD'},
   'Spore Slam':{p:10,a:.85,t:'MOLD'},'Fungus Bite':{p:9,a:.9,t:'MOLD'},'Cap Shield':{p:0,a:1,e:'def+',t:'MOLD'},'Mold':{p:8,a:.95,t:'MOLD'},
   'Cicada Song':{p:9,a:.95,t:'FLYING'},'Silk Wrap':{p:8,a:.95,t:'MOLD'},
+  'Wiggle':{p:4,a:.95,t:'MOLD'},'Wing Gale':{p:11,a:.9,t:'FLYING'},'Milkweed Dust':{p:0,a:1,e:'espd-',t:'MOLD'},'Sunbeam':{p:12,a:.86,t:'FLYING'},'Migration Rush':{p:14,a:.82,t:'FLYING'},
+};
+Object.assign(MOVES,{
+  'Raptor Slash':{p:13,a:.85,t:'BEETLE'},'Hive Rush':{p:12,a:.9,t:'FLYING'},'Aqua Lance':{p:12,a:.9,t:'AQUATIC'},'Spore Bomb':{p:12,a:.88,t:'MOLD'},
+  'Sky Cutter':{p:13,a:.85,t:'FLYING'},'Shell Break':{p:13,a:.82,t:'BEETLE'},'Tidal Crush':{p:14,a:.8,t:'AQUATIC'},'Bloom Haze':{p:0,a:1,e:'espd-',t:'MOLD'},
+  'Thunder Buzz':{p:14,a:.82,t:'FLYING'},'Root Snare':{p:10,a:.95,t:'MOLD'},'Giant Horn':{p:15,a:.78,t:'BEETLE'},'Current Guard':{p:0,a:1,e:'def+',t:'AQUATIC'},
+});
+const LEARNSETS={
+  ambush:[[6,'Raptor Slash'],[11,'Shell Break']],firefly:[[6,'Sky Cutter'],[12,'Thunder Buzz']],strider:[[6,'Aqua Lance'],[11,'Current Guard']],
+  stag:[[5,'Shell Break'],[10,'Giant Horn']],bee:[[5,'Hive Rush'],[11,'Sky Cutter']],waterbug:[[7,'Aqua Lance'],[12,'Tidal Crush']],
+  backswim:[[7,'Current Guard'],[12,'Aqua Lance']],larva:[[8,'Tidal Crush'],[13,'Root Snare']],carrion:[[10,'Raptor Slash'],[14,'Spore Bomb']],
+  slug:[[9,'Root Snare'],[13,'Bloom Haze']],shroomfly:[[9,'Spore Bomb'],[13,'Sky Cutter']],fungus:[[10,'Bloom Haze'],[14,'Spore Bomb']],
+  mosquito:[[7,'Aqua Lance'],[12,'Thunder Buzz']],cicada:[[11,'Thunder Buzz'],[14,'Sky Cutter']],tentcat:[[11,'Bloom Haze'],[14,'Root Snare']],
+  elephant:[[11,'Giant Horn'],[15,'Shell Break']],stinkbug:[[6,'Bloom Haze'],[12,'Raptor Slash']],worm:[[6,'Root Snare'],[12,'Spore Bomb']],
+  boatman:[[8,'Aqua Lance'],[12,'Tidal Crush']],diver:[[8,'Tidal Crush'],[13,'Shell Break']],mayfly:[[11,'Thunder Buzz'],[14,'Sky Cutter']],pillbug:[[11,'Shell Break'],[14,'Giant Horn']],
 };
 
 // G.loadout: array of instance objects with their own level/xp/hp.
@@ -307,6 +327,8 @@ function newCaughtInstance(id, level, opts){
     xp: 0,
     hp: opts.hp !== undefined ? Math.min(opts.hp, ns.hp) : ns.hp,
     maxHp: ns.hp,
+    moves: (opts.moves && opts.moves.length ? opts.moves : BUGS[id].moves).slice(0,4),
+    stepsHeld: opts.stepsHeld || 0,
   };
 }
 // Build a battle bug from an owned instance, preserving a reference back
@@ -322,7 +344,7 @@ function makeBugFromInstance(inst){
     maxHp: ns.hp,
     atk: ns.atk, def: ns.def, spd: ns.spd,
     type: b.type,
-    moves: [...b.moves],
+    moves: [...((inst.moves&&inst.moves.length)?inst.moves:b.moves)],
     db: 0, sb: 0, ev: 0,
   };
 }
@@ -404,7 +426,7 @@ function getSlotInfo(n){
 }
 
 const SAVE_VERSION = 2;
-const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0};
+const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0};
 
 function clonePlain(value, fallback){
   if(value === undefined || value === null) return fallback;
@@ -463,6 +485,8 @@ function normalizeSavedLoadout(saved){
       xp: Math.max(0, Number(item.xp) || 0),
       hp: Math.max(0, Math.min(item.hp !== undefined ? Number(item.hp) : ns.hp, ns.hp)),
       maxHp: ns.hp,
+      moves: (Array.isArray(item.moves) ? item.moves.filter(m=>MOVES[m]).slice(0,4) : BUGS[item.id].moves.slice(0,4)),
+      stepsHeld: Math.max(0, Number(item.stepsHeld) || 0),
     });
   });
 
@@ -493,6 +517,7 @@ function getSaveData(){
       rakedTiles: clonePlain(G.rake && G.rake.rakedTiles, {}),
       lastZone: G.rake ? G.rake.lastZone : null,
     },
+    fruitTrees:   {checked: clonePlain(G.fruitTrees && G.fruitTrees.checked, {})},
     boatmanTalked: !!G.boatmanTalked,
     boatmanTraded: !!G.boatmanTraded,
     pigFeeds:     G.pig._feeds || 0,
@@ -544,6 +569,7 @@ function loadFromSlot(n){
       rakedTiles: clonePlain(d.rake && d.rake.rakedTiles, {}),
       lastZone: d.rake ? d.rake.lastZone : null,
     };
+    G.fruitTrees = {checked: clonePlain(d.fruitTrees && d.fruitTrees.checked, {})};
     G.boatmanTalked = !!d.boatmanTalked;
     G.boatmanTraded = !!d.boatmanTraded;
     G.pig._feeds = d.pigFeeds || 0;
@@ -755,7 +781,9 @@ function spMosquito(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1)
 function spCicada(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-9*s,t=cy-14*s;DR(c,o,t,4,2,10,22,'#4a4a20',s);DR(c,o,t,2,4,14,14,'#6a6a28',s);DR(c,o,t,3,-2,12,7,'#303020',s);DR(c,o,t,4,-1,4,4,'#e03030',s);DR(c,o,t,11,-1,4,4,'#e03030',s);DR(c,o,t,7,-8,2,7,'#303020',s);DR(c,o,t,11,-8,2,7,'#303020',s);c.fillStyle='rgba(160,255,245,0.55)';c.fillRect(o-9*s,t+2*s,12*s,22*s);c.fillRect(o+15*s,t+2*s,12*s,22*s);c.fillStyle='rgba(255,255,255,0.35)';c.fillRect(o-7*s,t+4*s,8*s,4*s);c.fillRect(o+17*s,t+4*s,8*s,4*s);DR(c,o,t,-3,12,7,2,'#303020',s);DR(c,o,t,14,12,7,2,'#303020',s);c.restore();}
 function spTentcat(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-16*s,t=cy-8*s;for(let i=0;i<5;i++){DR(c,o,t,i*6,6+Math.sin(G.tick*.08+i)*2,8,10,i%2?'#d8f0f8':'#f0f8ff',s);DR(c,o,t,i*6,13+Math.sin(G.tick*.08+i)*2,8,4,'#90d8f0',s);}DR(c,o,t,28,4,10,12,'#f8f8f0',s);DR(c,o,t,30,6,3,3,'#302030',s);DR(c,o,t,35,6,3,3,'#302030',s);for(let i=0;i<6;i++){DR(c,o,t,i*6+1,16,3,4,'#80c8d8',s);DR(c,o,t,i*6+4,16,3,4,'#80c8d8',s);}c.fillStyle='rgba(255,255,255,0.45)';c.fillRect(o-2*s,t+2*s,40*s,5*s);c.restore();}
 function spElephant(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-15*s,t=cy-12*s;DR(c,o,t,2,8,28,16,'#1c1720',s);DR(c,o,t,4,5,24,18,'#282030',s);DR(c,o,t,10,0,14,9,'#201828',s);DR(c,o,t,12,2,4,4,'#e04040',s);DR(c,o,t,20,2,4,4,'#e04040',s);DR(c,o,t,15,-9,5,12,'#201828',s);DR(c,o,t,12,-12,11,5,'#201828',s);DR(c,o,t,9,-15,6,4,'#201828',s);DR(c,o,t,21,-15,6,4,'#201828',s);DR(c,o,t,12,13,18,4,'#544070',s);DR(c,o,t,-5,11,8,3,'#1a1420',s);DR(c,o,t,29,11,8,3,'#1a1420',s);DR(c,o,t,-8,14,7,3,'#1a1420',s);DR(c,o,t,34,14,7,3,'#1a1420',s);DR(c,o,t,6,22,5,5,'#101018',s);DR(c,o,t,21,22,5,5,'#101018',s);c.restore();}
-const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito,cicada:spCicada,tentcat:spTentcat,elephant:spElephant};
+function spCocoon(c,cx,cy,s,f){c.save();const o=cx-8*s,t=cy-15*s;DR(c,o,t,2,0,12,28,'#d8c088',s);DR(c,o,t,0,5,16,18,'#c0a070',s);for(let i=0;i<5;i++)DR(c,o,t,1,5+i*4,14,1,'#9a8058',s);DR(c,o,t,4,3,8,4,'#efe0b0',s);DR(c,o,t,6,9,4,3,'#806840',s);c.restore();}
+function spMonarch(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx,t=cy;DR(c,o,t,-2,-14,4,28,'#202020',s);DR(c,o,t,-4,-18,8,7,'#303030',s);c.fillStyle='#f07818';c.fillRect(o-28*s,t-22*s,24*s,30*s);c.fillRect(o+4*s,t-22*s,24*s,30*s);c.fillStyle='#d85010';c.fillRect(o-24*s,t+4*s,20*s,18*s);c.fillRect(o+4*s,t+4*s,20*s,18*s);c.fillStyle='#101010';c.fillRect(o-28*s,t-22*s,5*s,44*s);c.fillRect(o+23*s,t-22*s,5*s,44*s);c.fillRect(o-28*s,t-2*s,56*s,4*s);c.fillRect(o-8*s,t-22*s,4*s,44*s);c.fillRect(o+4*s,t-22*s,4*s,44*s);c.fillStyle='#ffffff';[[-23,-16],[-18,12],[17,-16],[22,12]].forEach(([x,y])=>c.fillRect(o+x*s,t+y*s,4*s,4*s));DR(c,o,t,-7,-25,2,8,'#202020',s);DR(c,o,t,5,-25,2,8,'#202020',s);c.restore();}
+const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito,cicada:spCicada,tentcat:spTentcat,elephant:spElephant,cocoon:spCocoon,monarch:spMonarch};
 function drawBug(ctx,id,cx,cy,s=1,flip=false){if(SFN[id])SFN[id](ctx,cx,cy,s,flip);}
 
 // ── PLAYER SPRITE ──────────────────────────────
@@ -1083,7 +1111,7 @@ function drawTypeBadge(x,y,t){
 // Tile codes: 0=floor 1=grass 2=wall/tree 3=unused
 // 4=path 5=PCbuilding(solid) 6=portal 7=pond 9=shrooms
 // 11=PCdoor(enter) 12=PCexit 13=PCdesk 14=PCfloor 15=PCcounter
-// 21=treetop 22=sky bridge 23=dream bed 24=lab bed 25=open sky 26=aquarium 27=flowery treetop encounter
+// 21=treetop 22=sky bridge 23=dream bed 24=lab bed 25=open sky 26=aquarium 27=flowery treetop encounter 28=fruit tree
 // ═══════════════════════════════════════════════
 const TW=16,TALL=27,WIDE=30;
 const MAPS={};
@@ -1113,6 +1141,7 @@ function buildMap(z){
     for(let x=15;x<=22;x++)m[21][x]=4;
     // Door at row 11
     m[11][14]=11;m[11][15]=11;
+    [[5,6],[8,10],[21,7],[25,12],[4,22],[24,22],[11,18],[19,18]].forEach(([x,y])=>m[y][x]=28);
     // South zone portal
     if(G.unlockedZones.has(2)){m[TALL-2][14]=6;m[TALL-2][15]=6;}
   } else if(z===2){
@@ -1202,7 +1231,7 @@ function gt(z,tx,ty){
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28;}
 function isEncounter(t){return t===1||t===7||t===9||t===27;}
 function isWater(t){return t===7;}
 
@@ -1280,12 +1309,15 @@ function drawTile(tile,sx,sy,tx,ty){
     case 4: // path
       X.fillStyle='#c8a060';X.fillRect(sx,sy,TW,TW);
       X.fillStyle='#b89050';X.fillRect(sx+1,sy+1,6,6);X.fillRect(sx+9,sy+9,6,6);break;
-    case 5: // PC building exterior - red roof tiles
-      X.fillStyle='#e8d0c0';X.fillRect(sx,sy,TW,TW);
-      X.fillStyle='#c02828';X.fillRect(sx,sy,TW,5);
-      X.fillStyle='#d83838';X.fillRect(sx+2,sy+1,12,3);
-      X.fillStyle='#a8a0b8';X.fillRect(sx+4,sy+6,8,10);
-      X.fillStyle='rgba(180,220,255,0.5)';X.fillRect(sx+5,sy+7,6,8);break;
+    case 5: { // field lab cabin exterior
+      X.fillStyle='#5aa030';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#6a3a18';X.fillRect(sx,sy+4,TW,12);
+      X.fillStyle='#8a5528';X.fillRect(sx,sy+5,TW,2);X.fillRect(sx,sy+9,TW,2);X.fillRect(sx,sy+13,TW,2);
+      X.fillStyle='#3a1a08';X.fillRect(sx,sy,TW,5);
+      X.fillStyle='#5a2a10';X.fillRect(sx+2,sy+1,12,4);
+      X.fillStyle='#ffd878';X.fillRect(sx+4,sy+7,8,6);
+      X.fillStyle='rgba(120,200,255,0.45)';X.fillRect(sx+5,sy+8,6,4);
+      break;}
     case 6: // zone portal
       X.fillStyle='#c89020';X.fillRect(sx,sy,TW,TW);
       {const pf=Math.sin(G.tick*.12)*3;
@@ -1367,6 +1399,18 @@ function drawTile(tile,sx,sy,tx,ty){
       }
       X.fillStyle='rgba(0,80,120,0.25)';X.fillRect(sx,sy+14,TW,2);
       break;}
+    case 28: { // checkable fruit tree
+      const checked=G.fruitTrees&&G.fruitTrees.checked&&G.fruitTrees.checked[tx+','+ty];
+      X.fillStyle='#50a028';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#5a2d10';X.fillRect(sx+6,sy+8,5,8);
+      X.fillStyle='#8a4a20';X.fillRect(sx+8,sy+8,2,8);
+      X.fillStyle=checked?'#174810':'#0e5c12';X.fillRect(sx+1,sy+1,14,10);
+      X.fillStyle=checked?'#246820':'#1f8c26';X.fillRect(sx,sy+4,16,8);
+      X.fillStyle=checked?'#307830':'#42b83a';X.fillRect(sx+3,sy,10,7);
+      if(!checked){
+        X.fillStyle='#ff4050';X.fillRect(sx+4,sy+5,3,3);X.fillStyle='#ffd840';X.fillRect(sx+10,sy+3,3,3);
+      }
+      break;}
     case 9: // mushroom field
       X.fillStyle='#301828';X.fillRect(sx,sy,TW,TW);
       {var seed=(tx*31+ty*17)%8;
@@ -1375,19 +1419,18 @@ function drawTile(tile,sx,sy,tx,ty){
       X.fillStyle='#d8d0b8';X.fillRect(ox2+4,sy+ch+3,4,TW-ch-4);
       X.fillStyle=cap;X.fillRect(ox2+1,sy+3,12,ch);X.fillRect(ox2,sy+3+(ch/2)|0,14,(ch/2)|0);
       X.fillStyle='rgba(255,255,255,0.4)';X.fillRect(ox2+2,sy+3,4,2);}break;
-    case 11: // PC door (exterior)
+    case 11: // cabin door (exterior)
       X.fillStyle='#c8a060';X.fillRect(sx,sy,TW,TW); // path below door
-      X.fillStyle='#c02828';X.fillRect(sx,sy,TW,4); // red roof overhang
+      X.fillStyle='#3a1a08';X.fillRect(sx,sy,TW,4); // roof overhang
       // Door frame
-      X.fillStyle='#605040';X.fillRect(sx+2,sy+3,12,13);
-      X.fillStyle='#c8a860';X.fillRect(sx+3,sy+4,10,12);
-      // Glass panels
-      X.fillStyle='rgba(160,200,240,0.7)';X.fillRect(sx+4,sy+5,4,10);X.fillRect(sx+9,sy+5,4,10);
+      X.fillStyle='#4a240e';X.fillRect(sx+2,sy+3,12,13);
+      X.fillStyle='#8a5528';X.fillRect(sx+3,sy+4,10,12);
+      X.fillStyle='#a86830';X.fillRect(sx+4,sy+5,8,10);
       // Handle
       X.fillStyle='#f0c020';X.fillRect(sx+8,sy+10,2,2);
-      // Sign
-      X.fillStyle='#f0f0f0';X.fillRect(sx+4,sy-3,8,4);
-      X.fillStyle='#c02828';X.fillRect(sx+5,sy-2,6,2);break;
+      // wooden field lab sign
+      X.fillStyle='#d8b060';X.fillRect(sx+3,sy-3,10,4);
+      X.fillStyle='#604020';X.fillRect(sx+5,sy-2,6,1);break;
     case 12: // PC exit (interior bottom)
       X.fillStyle='#d8c8a8';X.fillRect(sx,sy,TW,TW);
       X.fillStyle='#605040';X.fillRect(sx+2,sy,12,13);
@@ -1749,6 +1792,7 @@ function drawWorld(){
         G.moveDelay=8;
       } else if(walkable(tile)){
         p.x=nx;p.y=ny;
+        countBugStep();
         // No moveDelay set on normal walk — next step triggers when visual arrives
         if(isEncounter(tile)&&Math.random()<.13)triggerEnc();
         if(tile===6)doPortal(tx,ty);
@@ -1889,6 +1933,7 @@ function exitPC(){
   G.player.x=14*TW; G.player.y=13*TW; G.player.dir=2;
   G.player.visX=G.player.x; G.player.visY=G.player.y;
   G.moveDelay=20;
+  onEnterZone(G.zone);
 }
 
 function tryTalkDesk(){
@@ -1910,7 +1955,7 @@ function startBattleTransition(){
 }
 
 function wildEncounterPool(zone){
-  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly);
+  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly&&!BUGS[id].fruitOnly);
 }
 
 function chooseWildEncounterId(zone){
@@ -1935,13 +1980,65 @@ function triggerEnc(){
   sfx('encounter');
 }
 
+function checkFruitTree(tx,ty){
+  if(G.zone!==1)return;
+  G.fruitTrees=G.fruitTrees||{checked:{}};
+  const key=tx+','+ty;
+  if(G.fruitTrees.checked[key]){
+    G.pcMsg='You already checked\nthis tree.';
+    G.pcMsgTimer=110;
+    return;
+  }
+  G.fruitTrees.checked[key]=true;
+  const roll=Math.random();
+  if(roll<1/8){
+    const inst=newCaughtInstance('cocoon',Math.max(2,zoneLevel(1).min));
+    const dest=addBugToCollection(inst);
+    G.seen.add('cocoon');
+    G.pcMsg=`A COCOON was tucked\nunder a leaf!\nIt went to your ${dest==='storage'?'aquarium':'party'}.`;
+    G.pcMsgTimer=230;
+    sfx('caught_jingle');
+  } else if(roll<1/8+1/6){
+    G.inventory.wildFruit=(G.inventory.wildFruit||0)+1;
+    G.pcMsg=`Found wild fruit!\n(Have: ${G.inventory.wildFruit})`;
+    G.pcMsgTimer=180;
+    sfx('buff');
+  } else {
+    G.pcMsg='No fruit here.';
+    G.pcMsgTimer=110;
+    sfx('miss');
+  }
+}
+
+function hatchCocoon(inst){
+  inst.id='monarch';
+  inst.nickname=inst.nickname||null;
+  inst.stepsHeld=0;
+  inst.moves=BUGS.monarch.moves.slice(0,4);
+  inst.maxHp=levelStats('monarch',inst.level).hp;
+  inst.hp=inst.maxHp;
+  G.seen.add('monarch');
+  G.pcMsg='Your COCOON cracked open!\nIt became a MONARCH!';
+  G.pcMsgTimer=260;
+  sfx('levelup');
+}
+
+function countBugStep(){
+  (G.loadout||[]).forEach(inst=>{
+    if(inst.id==='cocoon'){
+      inst.stepsHeld=(inst.stepsHeld||0)+1;
+      if(inst.stepsHeld>=1000)hatchCocoon(inst);
+    }
+  });
+}
+
 function doPortal(tx,ty){
   const p=G.player;
   // Always enter the new zone near the door that leads BACK.
   // Southward entries land at the TOP (row 2), facing south.
   // Northward entries land at the BOTTOM (row TALL-3), facing north.
   if(G.zone===1&&ty===TALL-2){G.zone=2;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(2);sfx('portal');onEnterZone(2);}
-  else if(G.zone===2&&ty===1){G.zone=1;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(1);sfx('portal');}
+  else if(G.zone===2&&ty===1){G.zone=1;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(1);sfx('portal');onEnterZone(1);}
   else if(G.zone===2&&ty===TALL-2){G.zone=3;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(3);sfx('portal');}
   else if(G.zone===3&&ty===1){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(2);sfx('portal');onEnterZone(2);}
   p.visX=p.x; p.visY=p.y;
@@ -2334,6 +2431,7 @@ function drawBattle(){
   const bt=G.battle,bp=G.battleParty,bg=BATZ[G.zone]||BATZ[1];
   if(!bt||!bp.length)return;
   const me=bp[0];G.btTick++;
+  const anim=battleSpriteOffsets();
   // Background - taller sky, shorter ground so bugs have more room
   X.fillStyle=bg.sky;X.fillRect(0,0,480,270);
   X.fillStyle=bg.hor;X.fillRect(0,200,480,50);
@@ -2383,7 +2481,7 @@ function drawBattle(){
     const netShakeOff = (G.battlePhase==='net_anim' && G.netAnim.phase==='shake')
       ? Math.sin(G.netAnim.timer * 0.55) * 10 * Math.max(0, 1 - G.netAnim.timer / 22) : 0;
     if(G.btFlashE>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashE--;}
-    if(!isSparkle && !netCaught) drawBug(X,bt.wild.id,360+netShakeOff,160,3.0);
+    if(!isSparkle && !netCaught) drawBug(X,bt.wild.id,360+netShakeOff+anim.ex,160+anim.ey,3.0);
     X.globalAlpha=1;
     // Net animation overlay, or persistent net after catch
     if(G.battlePhase==='net_anim') drawNetAnim();
@@ -2392,7 +2490,21 @@ function drawBattle(){
 
   // Player bug — raised, well above message box at y=270
   if(G.btFlashP>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashP--;}
-  drawBug(X,me.id,110,175,3.0,true);X.globalAlpha=1;
+  drawBug(X,me.id,110+anim.px,175+anim.py,3.0,true);X.globalAlpha=1;
+  anim.effects.forEach(({a,p})=>{
+    if(!a.hit&&a.kind==='hit')return;
+    const sx=a.isPlayer?150:330, sy=a.isPlayer?160:170;
+    const tx=a.isPlayer?328:142, ty=a.isPlayer?150:176;
+    const x=sx+(tx-sx)*p,y=sy+(ty-sy)*p;
+    X.globalAlpha=Math.max(0,1-p);
+    X.fillStyle=a.type==='AQUATIC'?'#70d8ff':a.type==='FLYING'?'#f8f8ff':a.type==='MOLD'?'#c070ff':a.type==='BEETLE'?'#f0b040':'#ffffff';
+    if(a.kind==='status'){
+      X.strokeStyle=X.fillStyle;X.lineWidth=3;X.beginPath();X.arc(a.isPlayer?110:360,a.isPlayer?175:160,16+p*28,0,Math.PI*2);X.stroke();
+    } else {
+      X.fillRect(x-5,y-5,10,10);X.fillRect(x-2,y-13,4,26);
+    }
+    X.globalAlpha=1;
+  });
 
   // Wild panel — top right (only when bug is on field)
   if(!isTrainerIntro || G.battlePhase==='bug-in'){
@@ -2562,6 +2674,114 @@ function chooseEnemyMove(bug){
   const pool=damaging.length&&(!nonDamaging.length||Math.random()<0.8)?damaging:(nonDamaging.length?nonDamaging:moves);
   return pool[Math.floor(Math.random()*pool.length)];
 }
+function movePowerText(moveName){
+  const m=MOVES[moveName];
+  if(!m)return 'Power --';
+  return m.p>0?'Power '+m.p:'Status';
+}
+function moveEffectText(moveName){
+  const m=MOVES[moveName];
+  if(!m)return 'Unknown move.';
+  const bits=[];
+  if(m.t)bits.push(m.t+' type');
+  if(m.p>0)bits.push('accuracy '+Math.round((m.a||1)*100)+'%');
+  if(m.e==='def+')bits.push('raises DEF');
+  if(m.e==='spd+')bits.push('raises SPD');
+  if(m.e==='evade')bits.push('raises evasion');
+  if(m.e==='espd-')bits.push('lowers enemy SPD');
+  return bits.join(' · ')||'Basic attack';
+}
+function queueMoveLearn(inst,moveName){
+  if(!inst||!MOVES[moveName])return;
+  inst.moves=inst.moves&&inst.moves.length?inst.moves:BUGS[inst.id].moves.slice(0,4);
+  if(inst.moves.includes(moveName))return;
+  G.moveLearnQueue.push({uid:inst.uid,move:moveName,returnScreen:G.screen||'battle'});
+}
+function findOwnedInstanceByUid(uid){
+  return G.loadout.concat(G.storage||[]).find(inst=>inst.uid===uid);
+}
+function startNextMoveLearn(){
+  const next=G.moveLearnQueue.shift();
+  if(!next)return false;
+  const inst=findOwnedInstanceByUid(next.uid);
+  if(!inst)return startNextMoveLearn();
+  G.moveLearn={uid:next.uid,move:next.move,returnScreen:next.returnScreen||'battle'};
+  G.screen='move_learn';
+  sfx('levelup');
+  return true;
+}
+function finishMoveLearn(){
+  const ret=(G.moveLearn&&G.moveLearn.returnScreen)||'battle';
+  G.moveLearn=null;
+  if(startNextMoveLearn())return;
+  G.screen=ret;
+}
+function replaceMoveLearn(idx){
+  const ml=G.moveLearn, inst=ml&&findOwnedInstanceByUid(ml.uid);
+  if(!ml||!inst)return finishMoveLearn();
+  inst.moves=inst.moves&&inst.moves.length?inst.moves:BUGS[inst.id].moves.slice(0,4);
+  if(idx>=0&&idx<inst.moves.length)inst.moves[idx]=ml.move;
+  else if(inst.moves.length<4)inst.moves.push(ml.move);
+  if(G.battleParty){
+    G.battleParty.forEach(b=>{if(b._instRef&&b._instRef.uid===inst.uid)b.moves=[...inst.moves];});
+  }
+  finishMoveLearn();
+}
+function drawMoveLearn(){
+  const ml=G.moveLearn, inst=ml&&findOwnedInstanceByUid(ml.uid);
+  if(!ml||!inst){finishMoveLearn();return;}
+  X.fillStyle='#101820';X.fillRect(0,0,480,432);
+  for(let i=0;i<32;i++){X.fillStyle=`hsl(${(G.tick*5+i*29)%360},90%,65%)`;X.fillRect((i*67+G.tick)%480,(i*41)%432,4,4);}
+  panel(24,28,432,376,'#f8f8e8');
+  const b=BUGS[inst.id], ns=levelStats(inst.id,inst.level);
+  T((inst.nickname||b.name)+' can learn',240,66,7,'#303848','center');
+  T(ml.move,240,94,10,'#c02828','center');
+  drawBug(X,inst.id,92,150,2.5);
+  drawTypeBadge(150,122,MOVES[ml.move].t||b.type);
+  T(movePowerText(ml.move),206,134,7,'#303848');
+  T(moveEffectText(ml.move),150,154,5,'#506070');
+  T(`Current Lv.${inst.level}  HP ${inst.hp}/${ns.hp}  ATK ${ns.atk}  DEF ${ns.def}  SPD ${ns.spd}`,150,174,5,'#607080');
+  T('Choose a move to replace:',240,206,6,'#303848','center');
+  const moves=inst.moves&&inst.moves.length?inst.moves:BUGS[inst.id].moves.slice(0,4);
+  moves.forEach((mv,i)=>{
+    const x=52+(i%2)*190,y=226+Math.floor(i/2)*58;
+    X.fillStyle='#e8e0d0';X.fillRect(x,y,176,48);X.strokeStyle='#607080';X.strokeRect(x,y,176,48);
+    T(mv,x+8,y+16,5,'#303848');
+    T(movePowerText(mv)+' → '+movePowerText(ml.move),x+8,y+31,4,'#506070');
+    BTN(x+112,y+14,56,22,'REPLACE',()=>replaceMoveLearn(i));
+  });
+  if(moves.length<4)BTN(152,348,176,28,'ADD MOVE',()=>replaceMoveLearn(-1));
+  BTN(152,374,176,24,'KEEP OLD MOVES',()=>finishMoveLearn());
+}
+function startAttackAnim(isPlayer,moveName,moveDef,hit){
+  const kind=moveDef&&moveDef.p>0?'hit':'status';
+  G.attackAnims=G.attackAnims||[];
+  G.attackAnims.push({timer:0,duration:12,isPlayer,move:moveName,type:(moveDef&&moveDef.t)||'NONE',hit,kind});
+}
+function moveSfx(moveDef,hit,crit){
+  if(!hit){sfx('miss');return;}
+  if(!moveDef||moveDef.p<=0){sfx('buff');return;}
+  if(crit){sfx('crit');return;}
+  const t=moveDef.t||'NONE';
+  sfx(t==='AQUATIC'?'hit_aqua':t==='FLYING'?'hit_air':t==='MOLD'?'hit_mold':t==='BEETLE'?'hit_bug':'hit');
+}
+function battleSpriteOffsets(){
+  const out={px:0,py:0,ex:0,ey:0,effects:[]};
+  const arr=G.attackAnims||[];
+  for(const a of arr){
+    const p=Math.min(1,a.timer/a.duration);
+    let lunge;
+    if(p<0.18) lunge=44*(p/0.18);
+    else if(p<0.45) lunge=44;
+    else lunge=44*(1-(p-0.45)/0.55);
+    const bob=p<0.45?-5:2;
+    if(a.isPlayer){out.px+=lunge;out.py-=bob;}else{out.ex-=lunge;out.ey-=bob;}
+    out.effects.push({a,p});
+    a.timer++;
+  }
+  G.attackAnims=arr.filter(a=>a.timer<=a.duration);
+  return out;
+}
 function swapBug(idx){
   const bp=G.battleParty,t=bp.splice(idx,1)[0];
   bp.unshift(t);
@@ -2577,11 +2797,12 @@ function swapBug(idx){
         const ecrit=Math.random()<0.1;
         const er=calcDmg(emv.p,ecrit,wild,t,emv.t);
         t.hp=Math.max(0,t.hp-er.dmg);G.btFlashP=20;
-        sfx(ecrit?'crit':'hit');
+        startAttackAnim(false,em,emv,true);
+        moveSfx(emv,true,ecrit);
         const eff=er.typeMult>1?'\nSuper effective!':'';
         emsg=`${dne(wild)} used ${em}!`+(ecrit?' CRIT!':'')+`\nHit for ${er.dmg}!`+eff;
-      } else { sfx('miss'); emsg=`${dne(wild)} used ${em}!\nMissed!`; }
-    } else { sfx('buff'); emsg=`${dne(wild)} used ${em}!`; }
+      } else { startAttackAnim(false,em,emv,false); moveSfx(emv,false,false); emsg=`${dne(wild)} used ${em}!\nMissed!`; }
+    } else { startAttackAnim(false,em,emv,true); moveSfx(emv,true,false); emsg=`${dne(wild)} used ${em}!`; }
     G.battleMsg=`Go, ${dn(t)}!\n${emsg}`;
     G.battlePhase='result';
     G.pendingAction=t.hp<=0?(G.battleParty.some((b,i2)=>i2>0&&b.hp>0)?'autoswap':'lose'):'continue';
@@ -2633,17 +2854,20 @@ function doMove(mv){
         const r = calcDmg(moveDef.p, crit, attacker, defender, moveDef.t);
         defender.hp = Math.max(0, defender.hp - r.dmg);
         if(isPlayer) G.btFlashE = 20; else G.btFlashP = 20;
-        sfx(crit ? 'crit' : 'hit');
+        startAttackAnim(isPlayer,moveName,moveDef,true);
+        moveSfx(moveDef,true,crit);
         const eff = r.typeMult > 1 ? ' SUPER!' : '';
         return `${aName} used ${moveName}!` + (crit ? ' CRIT!' : '') + eff +
                `\nDealt ${r.dmg} dmg.`;
       } else {
-        sfx('miss');
+        startAttackAnim(isPlayer,moveName,moveDef,false);
+        moveSfx(moveDef,false,false);
         return `${aName} used ${moveName}!\nBut it missed!`;
       }
     } else {
       // Status move
-      sfx('buff');
+      startAttackAnim(isPlayer,moveName,moveDef,true);
+      moveSfx(moveDef,true,false);
       if(moveDef.e === 'def+'){ attacker.db = (attacker.db||0)+1; return `${aName}'s DEF rose!`; }
       if(moveDef.e === 'spd+'){ attacker.sb = (attacker.sb||0)+1; return `${aName}'s SPD rose!`; }
       if(moveDef.e === 'evade'){ attacker.ev = (attacker.ev||0)+1; return `${aName} got evasive!`; }
@@ -2705,6 +2929,7 @@ function afterResult(){
     awardXP(G.battleParty[0], xpGain);
     G.battleMsg = `You won!\n${dn(G.battleParty[0])} gained ${xpGain} XP!` + (G.lvlUpMsg||'');
     G.lvlUpMsg='';
+    if(G.moveLearnQueue.length)startNextMoveLearn();
     // Trainer battle: advance to next bug
     if(G.battle.trainer){
       const tr=G.battle.trainer;
@@ -2746,6 +2971,9 @@ function awardXP(battleBug, amount){
   // Award XP to the specific battle-bug INSTANCE (not species).
   const inst = battleBug._instRef;
   if(!inst) return;
+  inst.hp = Math.max(0, Math.min(battleBug.hp, battleBug.maxHp));
+  inst.moves = inst.moves&&inst.moves.length ? inst.moves : BUGS[inst.id].moves.slice(0,4);
+  const oldLevelBeforeXp = inst.level;
   inst.xp += amount;
   let lvls = 0;
   while(inst.xp >= xpForLevel(inst.level)){
@@ -2767,7 +2995,11 @@ function awardXP(battleBug, amount){
     battleBug.atk = ns.atk;
     battleBug.def = ns.def;
     battleBug.spd = ns.spd;
+    battleBug.moves = [...inst.moves];
     G.lvlUpMsg = '\n' + dn(battleBug) + ' grew to Lv.' + inst.level + '!';
+    (LEARNSETS[inst.id]||[]).forEach(([lvl,mv])=>{
+      if(lvl>oldLevelBeforeXp&&lvl<=inst.level)queueMoveLearn(inst,mv);
+    });
     sfx('levelup');
   }
 }
@@ -2834,6 +3066,7 @@ function doZAction(allowRake=true){
   if(ftile===12)exitPC();
   if(ftile===13)tryTalkDesk();
   if(ftile===26){openBugHolder();return;}
+  if(ftile===28){checkFruitTree(tx+ddx,ty+ddy);return;}
   if(interactWithFacingNPC())return;
 }
 function interactWithFacingNPC(){
@@ -3038,6 +3271,15 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
   ctx.save();
   if(key==='specialMushroom'){drawMushroomSprite(ctx,cx,cy,s);ctx.restore();return;}
   if(key==='lakeRake'){drawRakeSprite(ctx,cx,cy,s);ctx.restore();return;}
+  if(key==='wildFruit'){
+    ctx.fillStyle='#1f7a28';ctx.fillRect(cx-2*s,cy-18*s,4*s,7*s);
+    ctx.fillStyle='#55b83a';ctx.fillRect(cx+2*s,cy-18*s,9*s,5*s);
+    ctx.fillStyle='#e83848';ctx.fillRect(cx-12*s,cy-10*s,24*s,20*s);
+    ctx.fillStyle='#ff6a54';ctx.fillRect(cx-8*s,cy-13*s,16*s,8*s);
+    ctx.fillStyle='#b02038';ctx.fillRect(cx-11*s,cy+5*s,22*s,6*s);
+    ctx.fillStyle='#ffd870';ctx.fillRect(cx-4*s,cy-8*s,4*s,4*s);
+    ctx.restore();return;
+  }
   if(key==='lakeWeed'){
     ctx.fillStyle='#2f8c38';ctx.fillRect(cx-10*s,cy-10*s,5*s,22*s);ctx.fillRect(cx-1*s,cy-12*s,5*s,24*s);ctx.fillRect(cx+8*s,cy-9*s,5*s,20*s);
     ctx.fillStyle='#73f05a';ctx.fillRect(cx-9*s,cy-12*s,4*s,8*s);ctx.fillRect(cx,cy-15*s,4*s,9*s);ctx.fillRect(cx+9*s,cy-11*s,4*s,7*s);
@@ -3063,6 +3305,7 @@ function drawBag(){
   const items = [
     {key:'lakeRake',      label:'Lake Weed Rake',   qty: inv.lakeRake ? 1 : 0,     desc:'Press Z (or tap Z on mobile)\nwhile standing in water to rake.',       hasIt: !!inv.lakeRake},
     {key:'specialMushroom',label:'Mystery Truffle',  qty: inv.specialMushroom||0,   desc:'A truffle sniffed out by the pig.\nSmells... interesting.', hasIt: (inv.specialMushroom||0)>0},
+    {key:'wildFruit',      label:'Wild Fruit',        qty: inv.wildFruit||0,         desc:'Fruit shaken loose from Mossy\nWoods trees.',             hasIt: (inv.wildFruit||0)>0},
     {key:'lakeWeed',      label:'Lake Weed',         qty: inv.lakeWeed||0,          desc:'Clumps of pond weed. Maybe useful.',         hasIt: (inv.lakeWeed||0)>0},
     {key:'shinyRock',     label:'Shiny Rock',        qty: inv.shinyRock||0,         desc:'A smooth glittery rock.',                    hasIt: (inv.shinyRock||0)>0},
     {key:'scrapMetal',    label:'Scrap Metal',       qty: inv.scrapMetal||0,        desc:'Rusted metal bits from the pond.',           hasIt: (inv.scrapMetal||0)>0},
@@ -3074,23 +3317,23 @@ function drawBag(){
     T('Find items by exploring!', 240, 214, 5, '#909098', 'center');
   } else {
     items.forEach((it, i) => {
-      const iy = 42 + i * 72;
-      X.fillStyle = '#e8e4d8'; X.fillRect(8, iy, 464, 64);
-      X.strokeStyle = '#607040'; X.lineWidth=2; X.strokeRect(8, iy, 464, 64);
+      const iy = 42 + i * 60;
+      X.fillStyle = '#e8e4d8'; X.fillRect(8, iy, 464, 56);
+      X.strokeStyle = '#607040'; X.lineWidth=2; X.strokeRect(8, iy, 464, 56);
 
       // Icon area
-      X.fillStyle = '#c4d8c0'; X.fillRect(12, iy+4, 56, 56);
-      drawItemSprite(X,it.key,40,iy+38,it.key==='lakeRake'?0.65:0.72);
+      X.fillStyle = '#c4d8c0'; X.fillRect(12, iy+4, 48, 48);
+      drawItemSprite(X,it.key,36,iy+34,it.key==='lakeRake'?0.58:0.64);
 
       // Text
-      T(it.label, 80, iy+20, 8, '#303848');
+      T(it.label, 70, iy+18, 7, '#303848');
       const qtyStr = it.qty > 1 ? `×${it.qty}` : '';
-      if(qtyStr) T(qtyStr, 464, iy+20, 8, '#303848', 'right');
-      it.desc.split('\n').forEach((l,li)=>T(l, 80, iy+36+li*14, 5, '#607080'));
+      if(qtyStr) T(qtyStr, 464, iy+18, 7, '#303848', 'right');
+      it.desc.split('\n').forEach((l,li)=>T(l, 70, iy+33+li*12, 5, '#607080'));
 
       // USE button for mushroom
       if(it.key==='specialMushroom' && it.qty > 0){
-        BTN(360, iy+36, 100, 22, 'EAT →', ()=>{
+        BTN(360, iy+30, 100, 22, 'EAT →', ()=>{
           eatMysteryTruffle();
         });
       }
@@ -3351,6 +3594,7 @@ function loop(){
     case 'battle':  drawBattle(); break;
     case 'whiteout': drawWhiteout(); break;
     case 'naming':  drawNaming(); break;
+    case 'move_learn': drawMoveLearn(); break;
     case 'menu':    drawMenu();   break;
     case 'bugdex':  drawBugdex(); break;
     case 'loadout': drawLoadout();break;
@@ -3605,6 +3849,10 @@ function sfx(name){
     case 'menu':   tone(680, 0.05, 'square', 0.15, t); break;
     case 'select': tone(880, 0.07, 'square', 0.18, t); tone(1320, 0.07, 'square', 0.15, t+0.04); break;
     case 'hit':    noise(0.08, 0.3, t); tone(160, 0.08, 'sawtooth', 0.18, t); break;
+    case 'hit_bug': tone(180,0.05,'sawtooth',0.22,t); tone(120,0.07,'square',0.16,t+0.04); noise(0.05,0.18,t); break;
+    case 'hit_aqua': tone(520,0.06,'sine',0.18,t); tone(340,0.09,'triangle',0.16,t+0.05); break;
+    case 'hit_air': tone(900,0.05,'triangle',0.16,t); tone(1240,0.07,'sine',0.14,t+0.04); break;
+    case 'hit_mold': tone(260,0.12,'sawtooth',0.14,t); tone(390,0.08,'triangle',0.12,t+0.08); break;
     case 'crit':   tone(880, 0.06, 'square', 0.2, t); tone(440, 0.1, 'sawtooth', 0.22, t+0.04); noise(0.1, 0.3, t); break;
     case 'miss':   tone(220, 0.1, 'triangle', 0.18, t); tone(180, 0.08, 'triangle', 0.14, t+0.06); break;
     case 'faint':  tone(440, 0.15, 'sawtooth', 0.22, t); tone(330, 0.18, 'sawtooth', 0.2, t+0.12); tone(220, 0.25, 'sawtooth', 0.18, t+0.28); break;
@@ -3911,8 +4159,11 @@ function doRakeAction(){
   },600);
 }
 
-// Reset raked tiles when entering zone 2
+// Reset one-visit interactions when entering their zones
 function onEnterZone(z){
+  if(z===1){
+    G.fruitTrees={checked:{}};
+  }
   if(z===2){
     G.rake.rakedTiles={};
     G.rake.lastZone=2;
