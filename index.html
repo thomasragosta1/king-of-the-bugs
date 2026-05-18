@@ -186,11 +186,13 @@ PF.load().then(f=>{document.fonts.add(f);fontReady=true;}).catch(()=>fontReady=t
 // ═══════════════════════════════════════════════
 const G={
   screen:'title',
-  loadout:[], caught:{},
+  loadout:[], // array of instance objects {id, nickname, level, xp, hp, maxHp}
+  seen: new Set(), // species ids ever caught (for Bugdex)
   // zone: 1|2|3|'pc'  (pc = pokemon center interior)
-  zone:1, unlockedZones:new Set([1]), zoneCaught:{1:0,2:0,3:0},
+  zone:1, unlockedZones:new Set([1]),
   prevZone:1, prevPlayerX:0, prevPlayerY:0, // for returning from PC
   player:{x:14*16,y:18*16,dir:2,frame:0},
+  gear:{hat:'cap', jacket:'red', pants:'jeans', tool:'backpack'},
   keys:{}, tick:0, moveDelay:0,
   battle:null, battleParty:[],
   battleMsg:'', battlePhase:'action', pendingAction:null,
@@ -200,6 +202,19 @@ const G={
   naming:false, nameTarget:null, nameStr:'',
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
+  // Inventory items
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0},
+  // Rake system
+  rake:{
+    anim:0,         // animation frame counter (>0 = animating)
+    rakedTiles:{},  // key = "tx,ty" -> true (already raked this visit)
+    lastZone:null,  // reset rakedTiles when re-entering zone 2
+  },
+  // Boatman trade
+  boatmanTalked:false,
+  boatmanTraded:false,
+  // Reward screen
+  pendingItemReward:null, // {name, desc} for item reward screen
   bugdexScroll:0,
 };
 
@@ -207,51 +222,340 @@ const G={
 // BUG DATA
 // ═══════════════════════════════════════════════
 const BUGS={
-  ambush:  {name:'AMBUSH BUG',    hp:52,atk:18,def:14,spd:10,zone:1,starter:true, moves:['Ambush Strike','Iron Carapace','Bite','Lunge']},
-  firefly: {name:'FIREFLY',       hp:36,atk:14,def:8, spd:20,zone:1,starter:true, moves:['Flash Burst','Glow Smash','Dodge','Ember']},
-  strider: {name:'WATER STRIDER', hp:42,atk:10,def:11,spd:22,zone:1,starter:true, moves:['Ripple Kick','Skate Dodge','Surf Slash','Quick Dart']},
-  stag:    {name:'STAG BEETLE',   hp:55,atk:18,def:16,spd:7, zone:1, moves:['Horn Slam','Iron Shell','Pincer','Guard']},
-  bee:     {name:'BUMBLEBEE',     hp:40,atk:13,def:11,spd:15,zone:1, moves:['Sting','Buzz Dive','Pollen Toss','Gust']},
-  waterbug:{name:'WATER BUG',     hp:50,atk:15,def:13,spd:12,zone:2, moves:['Dive Bomb','Water Jet','Grab','Siphon']},
-  backswim:{name:'BACKSWIMMER',   hp:38,atk:12,def:9, spd:20,zone:2, moves:['Needle Jab','Backstroke','Bubble','Spin']},
-  larva:   {name:'DRAG. LARVA',   hp:47,atk:17,def:12,spd:10,zone:2, moves:['Jaw Snap','Jet Surge','Mud Splash','Extend']},
-  carrion: {name:'CARRION BEETLE',hp:60,atk:19,def:18,spd:6, zone:3, moves:['Rot Crush','Decay Spray','Armour Up','Bash']},
-  slug:    {name:'GARDEN SLUG',   hp:42,atk:11,def:15,spd:5, zone:3, moves:['Slime Trail','Ooze Burst','Acid Touch','Smother']},
-  shroomfly:{name:'SHROOM FLY',   hp:35,atk:14,def:8, spd:20,zone:3, moves:['Spore Cloud','Buzz Cut','Dart','Myco Bite']},
-  fungus:  {name:'FUNGUS BEETLE', hp:52,atk:16,def:14,spd:9, zone:3, moves:['Spore Slam','Fungus Bite','Cap Shield','Mold']},
+  ambush:  {name:'AMBUSH BUG',    type:'BEETLE',  hp:54,atk:18,def:13,spd:7, zone:1,starter:true, moves:['Ambush Strike','Iron Carapace','Bite','Lunge']},
+  firefly: {name:'FIREFLY',       type:'FLYING',  hp:46,atk:18,def:8, spd:18,zone:1,starter:true, moves:['Flash Burst','Glow Smash','Dodge','Ember']},
+  strider: {name:'WATER STRIDER', type:'AQUATIC', hp:44,atk:16,def:12,spd:24,zone:1,starter:true, moves:['Ripple Kick','Skate Dodge','Surf Slash','Quick Dart']},
+  stag:    {name:'STAG BEETLE',   type:'BEETLE',  hp:55,atk:18,def:16,spd:7, zone:1, moves:['Horn Slam','Iron Shell','Pincer','Guard']},
+  bee:     {name:'BUMBLEBEE',     type:'FLYING',  hp:40,atk:13,def:11,spd:15,zone:1, moves:['Sting','Buzz Dive','Pollen Toss','Gust']},
+  waterbug:{name:'WATER BUG',     type:'AQUATIC', hp:50,atk:15,def:13,spd:12,zone:2, moves:['Dive Bomb','Water Jet','Grab','Siphon']},
+  backswim:{name:'BACKSWIMMER',   type:'AQUATIC', hp:38,atk:12,def:9, spd:20,zone:2, moves:['Needle Jab','Backstroke','Bubble','Spin']},
+  larva:   {name:'DRAG. LARVA',   type:'AQUATIC', hp:47,atk:17,def:12,spd:10,zone:2, moves:['Jaw Snap','Jet Surge','Mud Splash','Extend']},
+  carrion: {name:'CARRION BEETLE',type:'BEETLE',  hp:60,atk:19,def:18,spd:6, zone:3, moves:['Rot Crush','Decay Spray','Armour Up','Bash']},
+  slug:    {name:'GARDEN SLUG',   type:'MOLD',    hp:42,atk:11,def:15,spd:5, zone:3, moves:['Slime Trail','Ooze Burst','Acid Touch','Smother']},
+  shroomfly:{name:'SHROOM FLY',   type:'MOLD',    hp:35,atk:14,def:8, spd:20,zone:3, moves:['Spore Cloud','Buzz Cut','Dart','Myco Bite']},
+  fungus:  {name:'FUNGUS BEETLE', type:'MOLD',    hp:52,atk:16,def:14,spd:9, zone:3, moves:['Spore Slam','Fungus Bite','Cap Shield','Mold']},
+  mosquito:{name:'MOSQUITO LARVA',type:'AQUATIC', hp:30,atk:10,def:6, spd:22,zone:2, moves:['Needle Jab','Quick Dart','Bubble','Spin']},
 };
+// ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
+const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
+const TYPE_COLORS={BEETLE:'#a06030',FLYING:'#7090d0',AQUATIC:'#3870c0',MOLD:'#7a5090',NONE:'#707070'};
 const MOVES={
-  'Ambush Strike':{p:11,a:.85},'Iron Carapace':{p:0,a:1,e:'def+'},'Bite':{p:9,a:.95},'Lunge':{p:10,a:.9},
-  'Flash Burst':{p:10,a:.9},'Glow Smash':{p:12,a:.80},'Dodge':{p:0,a:1,e:'spd+'},'Ember':{p:8,a:1},
-  'Ripple Kick':{p:7,a:1},'Skate Dodge':{p:0,a:1,e:'evade'},'Surf Slash':{p:9,a:.95},'Quick Dart':{p:8,a:1},
-  'Horn Slam':{p:12,a:.80},'Iron Shell':{p:0,a:1,e:'def+'},'Pincer':{p:11,a:.85},'Guard':{p:0,a:1,e:'def+'},
-  'Sting':{p:9,a:.9},'Buzz Dive':{p:10,a:.85},'Pollen Toss':{p:7,a:1},'Gust':{p:8,a:.95},
-  'Dive Bomb':{p:10,a:.85},'Water Jet':{p:9,a:.95},'Grab':{p:8,a:1},'Siphon':{p:7,a:1},
-  'Needle Jab':{p:9,a:.9},'Backstroke':{p:8,a:.95},'Bubble':{p:7,a:1},'Spin':{p:0,a:1,e:'spd+'},
-  'Jaw Snap':{p:11,a:.85},'Jet Surge':{p:9,a:.9},'Mud Splash':{p:7,a:1},'Extend':{p:8,a:.9},
-  'Rot Crush':{p:12,a:.80},'Decay Spray':{p:9,a:.9},'Armour Up':{p:0,a:1,e:'def+'},'Bash':{p:10,a:.85},
-  'Slime Trail':{p:0,a:1,e:'espd-'},'Ooze Burst':{p:8,a:.9},'Acid Touch':{p:9,a:.9},'Smother':{p:7,a:1},
-  'Spore Cloud':{p:8,a:.95},'Buzz Cut':{p:9,a:.95},'Dart':{p:7,a:1},'Myco Bite':{p:9,a:.9},
-  'Spore Slam':{p:10,a:.85},'Fungus Bite':{p:9,a:.9},'Cap Shield':{p:0,a:1,e:'def+'},'Mold':{p:8,a:.95},
+  'Ambush Strike':{p:11,a:.85,t:'BEETLE'},'Iron Carapace':{p:0,a:1,e:'def+',t:'BEETLE'},'Bite':{p:9,a:.95},'Lunge':{p:10,a:.9},
+  'Flash Burst':{p:10,a:.9,t:'FLYING'},'Glow Smash':{p:12,a:.80,t:'FLYING'},'Dodge':{p:0,a:1,e:'spd+'},'Ember':{p:8,a:1,t:'FLYING'},
+  'Ripple Kick':{p:7,a:1,t:'AQUATIC'},'Skate Dodge':{p:0,a:1,e:'evade'},'Surf Slash':{p:9,a:.95,t:'AQUATIC'},'Quick Dart':{p:8,a:1},
+  'Horn Slam':{p:12,a:.80,t:'BEETLE'},'Iron Shell':{p:0,a:1,e:'def+',t:'BEETLE'},'Pincer':{p:11,a:.85,t:'BEETLE'},'Guard':{p:0,a:1,e:'def+'},
+  'Sting':{p:9,a:.9},'Buzz Dive':{p:10,a:.85,t:'FLYING'},'Pollen Toss':{p:7,a:1},'Gust':{p:8,a:.95,t:'FLYING'},
+  'Dive Bomb':{p:10,a:.85,t:'AQUATIC'},'Water Jet':{p:9,a:.95,t:'AQUATIC'},'Grab':{p:8,a:1},'Siphon':{p:7,a:1,t:'AQUATIC'},
+  'Needle Jab':{p:9,a:.9},'Backstroke':{p:8,a:.95,t:'AQUATIC'},'Bubble':{p:7,a:1,t:'AQUATIC'},'Spin':{p:0,a:1,e:'spd+'},
+  'Jaw Snap':{p:11,a:.85},'Jet Surge':{p:9,a:.9,t:'AQUATIC'},'Mud Splash':{p:7,a:1,t:'AQUATIC'},'Extend':{p:8,a:.9},
+  'Rot Crush':{p:12,a:.80,t:'BEETLE'},'Decay Spray':{p:9,a:.9,t:'MOLD'},'Armour Up':{p:0,a:1,e:'def+',t:'BEETLE'},'Bash':{p:10,a:.85},
+  'Slime Trail':{p:0,a:1,e:'espd-',t:'MOLD'},'Ooze Burst':{p:8,a:.9,t:'MOLD'},'Acid Touch':{p:9,a:.9,t:'MOLD'},'Smother':{p:7,a:1},
+  'Spore Cloud':{p:8,a:.95,t:'MOLD'},'Buzz Cut':{p:9,a:.95,t:'FLYING'},'Dart':{p:7,a:1},'Myco Bite':{p:9,a:.9,t:'MOLD'},
+  'Spore Slam':{p:10,a:.85,t:'MOLD'},'Fungus Bite':{p:9,a:.9,t:'MOLD'},'Cap Shield':{p:0,a:1,e:'def+',t:'MOLD'},'Mold':{p:8,a:.95,t:'MOLD'},
 };
 
-// G.bugHP stores current HP for each caught bug id
-function makeBug(id){
-  const b=BUGS[id];
-  const hp=G.bugHP&&G.bugHP[id]!==undefined?G.bugHP[id]:b.hp;
-  return{id,hp,maxHp:b.hp,atk:b.atk,def:b.def,spd:b.spd,moves:[...b.moves],db:0,sb:0,ev:0};
+// G.loadout: array of instance objects with their own level/xp/hp.
+// G.seen: Set of species ids ever caught (used by Bugdex).
+let _uidCounter = 0;
+function xpForLevel(L){return 8+L*6;} // XP needed to go from L to L+1
+function zoneLevel(z){return z===1?{min:2,max:4}:z===2?{min:4,max:7}:z===3?{min:7,max:10}:{min:2,max:4};}
+function levelStats(id,level){
+  const b=BUGS[id], lv=Math.max(1,level||1)-1;
+  return{
+    hp: b.hp + Math.round(lv*3.0),
+    atk: b.atk + Math.round(lv*1.2),
+    def: b.def + Math.round(lv*0.8),
+    spd: b.spd + Math.round(lv*0.7),
+  };
 }
-function dn(bug){return G.caught[bug.id]||BUGS[bug.id].name;}
-function buildBattleParty(){return G.loadout.slice(0,6).map(id=>makeBug(id));}
+// Create a brand-new caught instance
+function newCaughtInstance(id, level, opts){
+  opts = opts || {};
+  level = Math.max(1, level || 1);
+  const ns = levelStats(id, level);
+  return {
+    uid: ++_uidCounter,
+    id: id,
+    nickname: opts.nickname || null,
+    level: level,
+    xp: 0,
+    hp: opts.hp !== undefined ? Math.min(opts.hp, ns.hp) : ns.hp,
+    maxHp: ns.hp,
+  };
+}
+// Build a battle bug from an owned instance, preserving a reference back
+function makeBugFromInstance(inst){
+  const b = BUGS[inst.id];
+  const ns = levelStats(inst.id, inst.level);
+  return {
+    _instRef: inst,
+    id: inst.id,
+    nickname: inst.nickname,
+    level: inst.level,
+    hp: inst.hp,
+    maxHp: ns.hp,
+    atk: ns.atk, def: ns.def, spd: ns.spd,
+    type: b.type,
+    moves: [...b.moves],
+    db: 0, sb: 0, ev: 0,
+  };
+}
+// Wild encounter bug (no instance reference — wild)
+function makeBug(id, opts){
+  opts = opts || {};
+  const b = BUGS[id];
+  const level = opts.level !== undefined ? opts.level : 1;
+  const s = levelStats(id, level);
+  return {
+    id, hp: s.hp, maxHp: s.hp,
+    atk: s.atk, def: s.def, spd: s.spd,
+    level, type: b.type, moves: [...b.moves],
+    db: 0, sb: 0, ev: 0,
+  };
+}
+function dn(bug){
+  if(bug.nickname) return bug.nickname;
+  if(bug._instRef && bug._instRef.nickname) return bug._instRef.nickname;
+  return BUGS[bug.id].name;
+}
+function buildBattleParty(){
+  return G.loadout.slice(0, 6).map(inst => makeBugFromInstance(inst));
+}
 function saveBattleHP(){
-  // Save current HP from battleParty back to persistent store
-  if(!G.bugHP) G.bugHP={};
-  G.battleParty.forEach(b=>{G.bugHP[b.id]=b.hp;});
+  // Write battle-bug HP back to its owned instance
+  G.battleParty.forEach(b => {
+    if(b._instRef){
+      b._instRef.hp = b.hp;
+      b._instRef.maxHp = b.maxHp;
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════
-// SPRITES
+// SAVE / LOAD  — 3 named slots
 // ═══════════════════════════════════════════════
+const SAVE_PREFIX = 'kotb_v1_slot_';
+let saveFlashTimer = 0;
+let saveFlashMsg   = '';
+
+// G.currentSlot = 0|1|2  (which slot is active in this session, null = new game)
+// G.screen states added: 'title_saves' (save-select screen), 'name_save' (name-input)
+
+function slotKey(n){ return SAVE_PREFIX + n; }
+
+function getSlotInfo(n){
+  try{
+    const raw = localStorage.getItem(slotKey(n));
+    if(!raw) return null;
+    const d = JSON.parse(raw);
+    return {
+      name:    d.saveName  || `Slot ${n+1}`,
+      zone:    d.zone      || 1,
+      bugCount: (d.loadout||[]).length,
+      savedAt: d.savedAt   || '',
+    };
+  } catch(e){ return null; }
+}
+
+function getSaveData(){
+  return {
+    saveName:     G.saveName || 'Trainer',
+    savedAt:      new Date().toLocaleString(),
+    loadout:      G.loadout,
+    seen:         [...G.seen],
+    zone:         typeof G.zone==='number' ? G.zone : 1,
+    unlockedZones:[...G.unlockedZones],
+    player:       {x:G.player.x, y:G.player.y, dir:G.player.dir},
+    gear:         G.gear,
+    _uid:         _uidCounter,
+  };
+}
+
+function saveToSlot(n){
+  try{
+    G.currentSlot = n;
+    localStorage.setItem(slotKey(n), JSON.stringify(getSaveData()));
+    saveFlashMsg   = `✓  Saved to "${G.saveName||'Trainer'}"`;
+    saveFlashTimer = 150; // ~2.5 sec at 60fps
+    sfx && sfx('heal');
+  } catch(e){ console.warn('Save failed', e); }
+}
+
+function loadFromSlot(n){
+  try{
+    const raw = localStorage.getItem(slotKey(n));
+    if(!raw) return false;
+    const d = JSON.parse(raw);
+    if(!d) return false;
+    G.currentSlot  = n;
+    G.saveName     = d.saveName || `Slot ${n+1}`;
+    G.loadout      = d.loadout  || [];
+    G.seen         = new Set(d.seen || []);
+    G.zone         = d.zone     || 1;
+    G.unlockedZones= new Set(d.unlockedZones || [1]);
+    if(d.player){
+      G.player.x    = d.player.x   || 14*16;
+      G.player.y    = d.player.y   || 18*16;
+      G.player.dir  = d.player.dir || 2;
+      G.player.visX = G.player.x;
+      G.player.visY = G.player.y;
+    }
+    if(d.gear) G.gear = d.gear;
+    if(d._uid) _uidCounter = d._uid;
+    return true;
+  } catch(e){ console.warn('Load failed', e); return false; }
+}
+
+function deleteSlot(n){
+  localStorage.removeItem(slotKey(n));
+  if(G.currentSlot === n) G.currentSlot = null;
+}
+
+// Auto-save: writes to the currently active slot (if any)
+function autoSave(){
+  if(G.currentSlot !== null && G.currentSlot !== undefined){
+    saveToSlot(G.currentSlot);
+  }
+}
+
+// ── Save-select screen state ──
+let _saveScreen = {
+  mode: 'load',   // 'load' | 'save'
+  confirmDelete: null, // slot index pending delete confirm
+};
+
+// ── Name-input state (for first save to a slot) ──
+let _nameInput = {
+  slot: 0,
+  str:  '',
+};
+
+// KB rows for name input
+const NAME_KB = [
+  ['A','B','C','D','E','F','G','H','I','J','K','L','M'],
+  ['N','O','P','Q','R','S','T','U','V','W','X','Y','Z'],
+  ['a','b','c','d','e','f','g','h','i','j','k','l','m'],
+  ['n','o','p','q','r','s','t','u','v','w','x','y','z'],
+  ['0','1','2','3','4','5','6','7','8','9',' ','!','.'],
+];
+
+// ── Draw: save-slot selection screen ──
+function drawSaveScreen(){
+  // Starfield bg
+  X.fillStyle='#080818'; X.fillRect(0,0,480,432);
+  X.fillStyle='#f8f8e8';
+  for(let i=0;i<60;i++) if(Math.sin(G.tick*.05+i*.7)>.6||i%4===0)
+    X.fillRect((i*73+G.tick*.08|0)%480,(i*47)%400,i%5?1:2,i%5?1:2);
+
+  const isLoad = _saveScreen.mode==='load';
+  panel(40,14,400,34,'#f8f8e8');
+  T(isLoad ? 'SELECT SAVE FILE' : 'SAVE TO SLOT', 240, 34, 8, '#303848', 'center');
+
+  // Three slot cards
+  for(let s=0;s<3;s++){
+    const info = getSlotInfo(s);
+    const by = 62 + s*112;
+    const bx = 40, bw = 400, bh = 100;
+
+    // Card background
+    X.fillStyle = info ? '#1a2840' : '#101820';
+    X.fillRect(bx,by,bw,bh);
+    X.strokeStyle = info ? '#4a7ab0' : '#2a3848';
+    X.lineWidth = 2;
+    X.strokeRect(bx+1,by+1,bw-2,bh-2);
+
+    // Slot number badge
+    X.fillStyle='#303848'; X.fillRect(bx+8,by+8,36,36);
+    T(`${s+1}`, bx+26, by+32, 10, '#a0b8d0', 'center');
+
+    if(info){
+      // Save name
+      T(info.name, bx+54, by+28, 8, '#e8e0d0');
+      // Zone name
+      const zn = {1:'Mossy Woods',2:'Murky Pond',3:'Mushroom Hollow'}[info.zone]||'Unknown';
+      T(`Zone: ${zn}`, bx+54, by+48, 6, '#8098b0');
+      // Bug count
+      T(`Bugs: ${info.bugCount}`, bx+54, by+64, 6, '#8098b0');
+      // Saved at
+      T(info.savedAt, bx+bw-10, by+28, 5, '#607080', 'right');
+
+      if(isLoad){
+        BTN(bx+bw-104, by+58, 96, 28, 'LOAD', ()=>{
+          if(loadFromSlot(s)){ sfx&&sfx('portal'); G.screen='world'; }
+        }, false);
+      } else {
+        // Save mode — show OVERWRITE
+        BTN(bx+bw-104, by+54, 96, 24, 'OVERWRITE', ()=>{ saveToSlot(s); G.screen='world'; }, false);
+        // Delete button
+        if(_saveScreen.confirmDelete===s){
+          BTN(bx+bw-214,by+54,105,24,'CONFIRM DEL',()=>{ deleteSlot(s); _saveScreen.confirmDelete=null; },false);
+        } else {
+          BTN(bx+bw-214,by+54,105,24,'DELETE',()=>{ _saveScreen.confirmDelete=s; },false);
+        }
+      }
+    } else {
+      // Empty slot
+      T('— Empty —', bx+54, by+46, 7, '#405060');
+      if(isLoad){
+        // Nothing to load
+      } else {
+        BTN(bx+bw-104, by+54, 96, 28, 'SAVE HERE', ()=>{
+          // Prompt for name first
+          _nameInput.slot = s;
+          _nameInput.str  = G.saveName || '';
+          G.screen = 'name_save';
+        }, true);
+      }
+    }
+  }
+
+  BTN(40, 400, 120, 26, '← BACK', ()=>{ _saveScreen.confirmDelete=null; G.screen='title'; });
+  if(!isLoad){
+    T('Auto-saves overwrite active slot on catch & zone change', 240, 428, 4, '#506070', 'center');
+  }
+}
+
+// ── Draw: name-input screen ──
+function drawNameSave(){
+  X.fillStyle='#080818'; X.fillRect(0,0,480,432);
+  panel(40,14,400,34,'#f8f8e8');
+  T('NAME YOUR SAVE FILE', 240, 34, 8, '#303848', 'center');
+
+  panel(40,56,400,44,'#f8f8e8');
+  T((_nameInput.str||'') + '_', 60, 84, 10, '#303848');
+  T(`${_nameInput.str.length}/14`, 420, 84, 6, '#909898', 'right');
+
+  // Keyboard
+  NAME_KB.forEach((row,ri)=>{
+    row.forEach((ch,ci)=>{
+      BTN(40+ci*30, 112+ri*36, 26, 28, ch===''?' ↵':ch, ()=>{
+        if(_nameInput.str.length<14) _nameInput.str+=ch;
+      });
+    });
+  });
+
+  BTN(40,  304, 80,  30, 'DEL',    ()=>{ _nameInput.str=_nameInput.str.slice(0,-1); });
+  BTN(130, 304, 160, 30, 'CONFIRM',()=>{
+    const name = _nameInput.str.trim()||'Trainer';
+    G.saveName = name;
+    saveToSlot(_nameInput.slot);
+    G.screen='world';
+  });
+  BTN(300, 304, 80,  30, 'CANCEL', ()=>{ G.screen='title_saves'; _saveScreen.mode='save'; });
+}
+
+// ── Save toast (drawn on top of world / menu) ──
+function drawSaveToast(){
+  if(saveFlashTimer<=0) return;
+  saveFlashTimer--;
+  const alpha = saveFlashTimer<30 ? saveFlashTimer/30 : 1;
+  X.globalAlpha = alpha;
+  X.fillStyle='#0a2010'; X.fillRect(100,390,280,32);
+  X.strokeStyle='#40c060'; X.lineWidth=2; X.strokeRect(101,391,278,30);
+  X.fillStyle='rgba(255,255,255,0.06)'; X.fillRect(102,392,276,10);
+  T(saveFlashMsg, 240, 410, 7, '#60e880', 'center');
+  X.globalAlpha=1;
+}
 function DR(c,ox,oy,x,y,w,h,col,s=1){
   c.fillStyle=col;
   c.fillRect((ox+x*s)|0,(oy+y*s)|0,Math.max(1,(w*s)|0),Math.max(1,(h*s)|0));
@@ -268,7 +572,23 @@ function spCarrion(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);
 function spSlug(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-14*s,t=cy-8*s;DR(c,o,t,4,0,24,14,'#9a7050',s);DR(c,o,t,0,3,32,10,'#9a7050',s);DR(c,o,t,2,1,28,12,'#b08060',s);DR(c,o,t,10,0,12,8,'#7a5038',s);DR(c,o,t,-2,3,8,8,'#a07858',s);DR(c,o,t,-6,-6,3,10,'#9a7050',s);DR(c,o,t,-1,-6,3,10,'#9a7050',s);DR(c,o,t,-7,-8,5,4,'#c84040',s);DR(c,o,t,-2,-8,5,4,'#c84040',s);DR(c,o,t,28,5,8,6,'rgba(150,210,80,0.5)',s);c.restore();}
 function spShroomfly(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-7*s,t=cy-12*s;DR(c,o,t,0,2,14,8,'#cc3318',s);DR(c,o,t,-1,3,16,6,'#dd4420',s);DR(c,o,t,1,2,4,3,'#fff',s);DR(c,o,t,7,1,3,3,'#fff',s);DR(c,o,t,10,3,3,3,'#fff',s);DR(c,o,t,1,9,12,12,'#882200',s);DR(c,o,t,0,10,14,10,'#aa3318',s);DR(c,o,t,0,0,14,5,'#551100',s);DR(c,o,t,-1,0,7,6,'#e04030',s);DR(c,o,t,8,0,7,6,'#e04030',s);DR(c,o,t,5,5,4,5,'#331100',s);c.fillStyle='rgba(220,240,255,0.6)';c.fillRect(o-10*s,t,11*s,10*s);c.fillRect(o+13*s,t,11*s,10*s);c.restore();}
 function spFungus(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-11*s,t=cy-10*s;DR(c,o,t,2,6,18,14,'#2a5010',s);DR(c,o,t,0,8,22,10,'#2a5010',s);DR(c,o,t,4,2,8,5,'#8ab028',s);DR(c,o,t,3,1,10,3,'#a0c030',s);DR(c,o,t,12,4,6,4,'#6a9020',s);DR(c,o,t,10,6,2,14,'#1a3808',s);DR(c,o,t,3,2,16,6,'#305818',s);DR(c,o,t,5,0,12,5,'#1a3808',s);DR(c,o,t,5,0,5,4,'#c06000',s);DR(c,o,t,12,0,5,4,'#c06000',s);DR(c,o,t,6,-6,2,7,'#1a3808',s);DR(c,o,t,14,-6,2,7,'#1a3808',s);c.restore();}
-const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus};
+function spMosquito(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-6*s,t=cy-10*s;
+  // Wriggly segmented body
+  const wg=Math.sin(G.tick*0.15)*s;
+  DR(c,o,t,4,0,8,4,'#2a4a2a',s);DR(c,o,t,3,3,10,4,'#2a4a2a',s);
+  DR(c,o,t,2,6,10,4,'#2a4a2a',s);DR(c,o,t,3,9,9,4,'#304a30',s);
+  DR(c,o,t,4,12,8,4,'#304a30',s);DR(c,o,t,5,15,6,5,'#2a4a2a',s);
+  // Head
+  DR(c,o,t,3,-2,10,5,'#1a2a1a',s);
+  // Eyes
+  DR(c,o,t,4,-1,3,3,'#e03030',s);DR(c,o,t,9,-1,3,3,'#e03030',s);
+  // Breathing tube at tail
+  DR(c,o,t,6,18,4,6,'#4a6a4a',s);DR(c,o,t,7,22,2,3,'#6a8a6a',s);
+  // Little fan tail
+  DR(c,o,t,3,22,5,2,'#3a5a3a',s);DR(c,o,t,8,22,5,2,'#3a5a3a',s);
+  c.restore();}
+const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito};
 function drawBug(ctx,id,cx,cy,s=1,flip=false){if(SFN[id])SFN[id](ctx,cx,cy,s,flip);}
 
 // ── PLAYER SPRITE ──────────────────────────────
@@ -278,6 +598,11 @@ function drawBug(ctx,id,cx,cy,s=1,flip=false){if(SFN[id])SFN[id](ctx,cx,cy,s,fli
 function drawPlayer(ctx,px,py,dir,fr,inWater=false){
   const wf=Math.floor(fr/2)%4; // 0,1,2,3 → still, left, still, right
   const x=px, y=py;
+  // Gear palette — picks up whatever the player has equipped in G.gear
+  const _g = G.gear || {};
+  const _PANTS = ({jeans:'#2a3f8a', khaki:'#8a7848', brown:'#5a4028'})[_g.pants] || '#2a3f8a';
+  const _JKT = ({red:'#c02828', vest:'#8a7028', raincoat:'#e8b410', field:'#486030'})[_g.jacket] || '#c02828';
+  const _JKT_LITE = ({red:'#e0e0e0', vest:'#c8a040', raincoat:'#fff080', field:'#789848'})[_g.jacket] || '#e0e0e0';
 
   ctx.save();
   // Shadow
@@ -324,8 +649,8 @@ function drawPlayer(ctx,px,py,dir,fr,inWater=false){
     ctx.restore();
     return; // skip rest of normal sprite
   } else {
-    // Blue pants with per-frame animation
-    ctx.fillStyle='#2a3f8a';
+    // Pants color from gear
+    ctx.fillStyle=_PANTS;
     if(dir===0){ // walking up - legs hidden behind body, just show feet
       ctx.fillRect(x-4,y+2,4,9); ctx.fillRect(x,y+2,4,9);
       if(wf===1){ctx.fillRect(x-4,y,4,3);} // left foot forward
@@ -348,14 +673,27 @@ function drawPlayer(ctx,px,py,dir,fr,inWater=false){
     ctx.fillRect(x-5,y+10,5,3); ctx.fillRect(x+1,y+10,4,3);
   }
 
-  // ── Body (red jacket) ──
-  ctx.fillStyle='#c02828'; ctx.fillRect(x-6,y-12,12,14);
+  // ── Body (jacket per gear) ──
+  ctx.fillStyle=_JKT; ctx.fillRect(x-6,y-12,12,14);
   // White collar
   ctx.fillStyle='#f0f0f0'; ctx.fillRect(x-5,y-12,10,3);
-  // Center stripe
-  ctx.fillStyle='#e0e0e0'; ctx.fillRect(x-1,y-9,2,10);
+  // Center stripe (jacket-tone highlight)
+  ctx.fillStyle=_JKT_LITE; ctx.fillRect(x-1,y-9,2,10);
+  // Jacket-specific accents
+  if(_g.jacket==='vest'){
+    // Pocket squares on the vest
+    ctx.fillStyle='#605030';
+    ctx.fillRect(x-5,y-6,4,3); ctx.fillRect(x+1,y-6,4,3);
+    ctx.fillStyle='#a88040'; ctx.fillRect(x-4,y-5,1,1); ctx.fillRect(x+2,y-5,1,1);
+  } else if(_g.jacket==='raincoat'){
+    // Buttons
+    ctx.fillStyle='#000'; ctx.fillRect(x,y-9,1,1); ctx.fillRect(x,y-6,1,1); ctx.fillRect(x,y-3,1,1);
+  } else if(_g.jacket==='field'){
+    // Shoulder patch
+    ctx.fillStyle='#789848'; ctx.fillRect(x-5,y-11,3,2); ctx.fillRect(x+2,y-11,3,2);
+  }
   // Arm swing based on direction+frame
-  ctx.fillStyle='#c02828';
+  ctx.fillStyle=_JKT;
   if(dir===1||dir===3){
     const aOff=(wf===1)?-3:(wf===3)?3:0;
     ctx.fillRect(x+5,y-10+aOff,4,8);   // right arm
@@ -371,9 +709,31 @@ function drawPlayer(ctx,px,py,dir,fr,inWater=false){
     ctx.fillRect(x+5,y-3,4,3);
     ctx.fillRect(x-8,y-3,4,3);
   }
-  // Backpack
-  ctx.fillStyle='#8a5828'; ctx.fillRect(x+5,y-10,5,11);
-  ctx.fillStyle='#6a3810'; ctx.fillRect(x+6,y-8,3,8);
+  // ── Held tool (replaces the over-shoulder slot) ──
+  if(_g.tool==='net'){
+    // Bug net — pole behind shoulder, hoop above
+    ctx.fillStyle='#a08050'; ctx.fillRect(x+6,y-22,2,32); // pole
+    ctx.strokeStyle='#303030'; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.arc(x+7,y-26,6,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(220,220,220,0.7)'; ctx.beginPath(); ctx.arc(x+7,y-26,5,0,Math.PI*2); ctx.fill();
+  } else if(_g.tool==='jar'){
+    // Specimen jar — glass cylinder with lid
+    ctx.fillStyle='rgba(180,220,200,0.75)'; ctx.fillRect(x+5,y-6,5,8);
+    ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fillRect(x+6,y-5,1,5);
+    ctx.fillStyle='#909890'; ctx.fillRect(x+5,y-8,5,3); // lid
+    ctx.fillStyle='#707870'; ctx.fillRect(x+5,y-9,5,1);
+  } else if(_g.tool==='magnifier'){
+    // Magnifying glass
+    ctx.fillStyle='#604030'; ctx.fillRect(x+5,y-2,2,8); // handle
+    ctx.strokeStyle='#303030'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(x+7,y-6,4,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(180,220,255,0.6)'; ctx.beginPath(); ctx.arc(x+7,y-6,3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.fillRect(x+6,y-8,1,1);
+  } else {
+    // Default: brown backpack
+    ctx.fillStyle='#8a5828'; ctx.fillRect(x+5,y-10,5,11);
+    ctx.fillStyle='#6a3810'; ctx.fillRect(x+6,y-8,3,8);
+  }
 
   // ── Head ──
   ctx.fillStyle='#f8c88a'; ctx.fillRect(x-5,y-21,10,9);
@@ -410,17 +770,43 @@ function drawPlayer(ctx,px,py,dir,fr,inWater=false){
   if(dir===3){ ctx.fillRect(x-6,y-21,3,6); }
   if(dir===1){ ctx.fillRect(x+3,y-21,3,6); }
 
-  // ── Red cap ──
-  ctx.fillStyle='#cc2020';
-  ctx.fillRect(x-6,y-25,12,6);
-  ctx.fillRect(x-7,y-24,14,3); // brim
-  // Cap highlight
-  ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillRect(x-3,y-25,5,3);
-  // White panel
-  ctx.fillStyle='#eeeedd'; ctx.fillRect(x-2,y-25,4,4);
-  // Brim direction extension
-  if(dir===2||dir===1){ ctx.fillStyle='#cc2020'; ctx.fillRect(x+5,y-24,4,2); }
-  if(dir===2||dir===3){ ctx.fillStyle='#cc2020'; ctx.fillRect(x-8,y-24,4,2); }
+  // ── Headwear from gear ──
+  if(_g.hat === 'cap' || !_g.hat){
+    // Red cap (default)
+    ctx.fillStyle='#cc2020';
+    ctx.fillRect(x-6,y-25,12,6);
+    ctx.fillRect(x-7,y-24,14,3); // brim
+    ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillRect(x-3,y-25,5,3);
+    ctx.fillStyle='#eeeedd'; ctx.fillRect(x-2,y-25,4,4);
+    if(dir===2||dir===1){ ctx.fillStyle='#cc2020'; ctx.fillRect(x+5,y-24,4,2); }
+    if(dir===2||dir===3){ ctx.fillStyle='#cc2020'; ctx.fillRect(x-8,y-24,4,2); }
+  } else if(_g.hat === 'safari'){
+    // Pith helmet — tan dome + brown band
+    ctx.fillStyle='#c8a060'; ctx.fillRect(x-6,y-26,12,7);
+    ctx.fillStyle='#d8b070'; ctx.fillRect(x-5,y-26,10,5);
+    ctx.fillStyle='#8a5828'; ctx.fillRect(x-6,y-21,12,2); // band
+    ctx.fillStyle='#c8a060'; ctx.fillRect(x-8,y-23,16,2); // wide brim
+    ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillRect(x-3,y-26,5,2);
+  } else if(_g.hat === 'straw'){
+    // Wide straw hat
+    ctx.fillStyle='#d8b070'; ctx.fillRect(x-6,y-25,12,5); // crown
+    ctx.fillStyle='#a87040'; ctx.fillRect(x-6,y-22,12,1); // band
+    ctx.fillStyle='#d8b070'; ctx.fillRect(x-9,y-23,18,2); // wide brim
+    ctx.fillStyle='#b88848'; for(let i=0;i<4;i++){ ctx.fillRect(x-6+i*4,y-24,1,1); }
+    ctx.fillStyle='rgba(255,240,180,0.4)'; ctx.fillRect(x-4,y-25,3,2);
+  } else if(_g.hat === 'beanie'){
+    // Knit beanie
+    ctx.fillStyle='#304878'; ctx.fillRect(x-6,y-25,12,6);
+    ctx.fillStyle='#4868a0'; ctx.fillRect(x-6,y-21,12,2); // cuff
+    // knit texture
+    ctx.fillStyle='#1a2848';
+    for(let i=0;i<4;i++){ ctx.fillRect(x-5+i*3,y-23,1,2); }
+    // Pom-pom
+    ctx.fillStyle='#e8d8c8'; ctx.fillRect(x-1,y-27,2,2);
+  } else if(_g.hat === 'none'){
+    // No hat — show extra hair tuft
+    ctx.fillStyle='#1a1010'; ctx.fillRect(x-4,y-25,8,3);
+  }
 
   ctx.restore();
 }
@@ -509,6 +895,20 @@ function HPBAR(x,y,w,cur,max){
   X.fillStyle=p>.5?'#58d838':p>.25?'#f8d820':'#f83830';
   X.fillRect(x,y,Math.max(0,(w*p)|0),6);
 }
+function XPBAR(x,y,w,cur,max){
+  const p=Math.max(0,Math.min(1,cur/max));
+  X.fillStyle='#181820';X.fillRect(x,y,w,3);
+  X.fillStyle='#5098f0';X.fillRect(x,y,Math.max(0,(w*p)|0),3);
+}
+function drawTypeBadge(x,y,t){
+  if(!t)return;
+  const bg=TYPE_COLORS[t]||'#707070';
+  const w=44, h=12;
+  X.fillStyle='#303848';X.fillRect(x-1,y-1,w+2,h+2);
+  X.fillStyle=bg;X.fillRect(x,y,w,h);
+  X.fillStyle='rgba(255,255,255,0.25)';X.fillRect(x,y,w,3);
+  T(t,x+w/2,y+9,5,'#f8f8e8','center');
+}
 
 // ═══════════════════════════════════════════════
 // MAPS
@@ -551,6 +951,8 @@ function buildMap(z){
     [[1,1,2,4],[27,1,2,4],[1,20,2,5],[27,20,2,5]].forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=2;
     });
+    // Boat tile — boatman sits here (walkable water tile, drawn as boat)
+    m[12][15]=20; m[12][16]=20; // 2 tiles wide boat
     m[1][14]=6;m[1][15]=6;
     if(G.unlockedZones.has(3)){m[TALL-2][14]=6;m[TALL-2][15]=6;}
   } else if(z===3){
@@ -689,16 +1091,33 @@ function drawTile(tile,sx,sy,tx,ty){
       {const pf=Math.sin(G.tick*.12)*3;
       X.fillStyle='#f8e050';X.fillRect(sx+2,sy+2+pf,12,12-Math.abs(pf)|0);
       X.fillStyle='rgba(255,240,100,0.5)';X.fillRect(sx+4,sy+4+pf,8,8-Math.abs(pf)|0);}break;
-    case 7: // pond
+    case 7: { // pond — check if raked
       X.fillStyle='#1848a8';X.fillRect(sx,sy,TW,TW);
-      {const rp=Math.sin(G.tick*.04+tx*.8+ty*.5)*1.5;
+      var rp=Math.sin(G.tick*.04+tx*.8+ty*.5)*1.5;
       X.fillStyle='rgba(80,160,255,0.35)';X.fillRect(sx+1,sy+4+rp,14,2);X.fillRect(sx+3,sy+10+rp,10,2);
-      X.fillStyle='rgba(180,220,255,0.2)';X.fillRect(sx,sy+7,16,1);}break;
+      X.fillStyle='rgba(180,220,255,0.2)';X.fillRect(sx,sy+7,16,1);
+      if(G.rake&&G.rake.rakedTiles&&G.rake.rakedTiles[tx+','+ty]){
+        X.fillStyle='rgba(200,230,255,0.25)';X.fillRect(sx,sy,TW,TW);
+        X.fillStyle='rgba(120,180,255,0.4)';
+        X.fillRect(sx+1,sy+3,14,2);X.fillRect(sx+2,sy+7,12,2);X.fillRect(sx+1,sy+11,14,2);
+      }
+      break;}
+    case 20: { // boat tile
+      X.fillStyle='#1848a8';X.fillRect(sx,sy,TW,TW);
+      var bp=Math.sin(G.tick*.06+tx*.4)*1.2;
+      X.fillStyle='#8a5828';X.fillRect(sx+1,sy+8+bp,14,7);
+      X.fillStyle='#a06838';X.fillRect(sx+2,sy+7+bp,12,2);
+      X.fillStyle='#6a3810';X.fillRect(sx+2,sy+13+bp,12,2);
+      X.fillStyle='#8a5828';X.fillRect(sx,sy+9+bp,2,5);X.fillRect(sx+14,sy+9+bp,2,5);
+      X.fillStyle='#c8a060';X.fillRect(sx-2,sy+10+bp,6,1);
+      X.fillStyle='#a07840';X.fillRect(sx-4,sy+9+bp,3,3);
+      X.fillStyle='rgba(120,160,200,0.3)';X.fillRect(sx+2,sy+15+bp,12,3);
+      break;}
     case 9: // mushroom field
       X.fillStyle='#301828';X.fillRect(sx,sy,TW,TW);
-      {const seed=(tx*31+ty*17)%8;
-      const caps=['#e03020','#f8a000','#d060d0','#4080e0','#20c040','#e06020','#c030a0','#80d0a0'];
-      const cap=caps[seed],ch=4+seed%3,ox2=sx+(seed%5)*2;
+      {var seed=(tx*31+ty*17)%8;
+      var caps=['#e03020','#f8a000','#d060d0','#4080e0','#20c040','#e06020','#c030a0','#80d0a0'];
+      var cap=caps[seed],ch=4+seed%3,ox2=sx+(seed%5)*2;
       X.fillStyle='#d8d0b8';X.fillRect(ox2+4,sy+ch+3,4,TW-ch-4);
       X.fillStyle=cap;X.fillRect(ox2+1,sy+3,12,ch);X.fillRect(ox2,sy+3+(ch/2)|0,14,(ch/2)|0);
       X.fillStyle='rgba(255,255,255,0.4)';X.fillRect(ox2+2,sy+3,4,2);}break;
@@ -759,7 +1178,7 @@ function drawTile(tile,sx,sy,tx,ty){
 // INTRO
 // ═══════════════════════════════════════════════
 const IDLG=[
-  {who:'NURSE JOY',txt:"He's awake!\nDoctor, he's awake!"},
+  {who:'NURSE FERN',txt:"He's awake!\nDoctor, he's awake!"},
   {who:'DR. MARSHALL',txt:"Sir... it's a miracle.\nYou've been in a coma\nfor 10 years."},
   {who:'DR. MARSHALL',txt:"We weren't sure you'd\never come back to us."},
   {who:'DR. MARSHALL',txt:"Hmm, there seems to\nhave been a mix-up\nwith your belongings."},
@@ -1021,12 +1440,13 @@ function drawStarterPick(){
     X.fillStyle='#c4d8ec';X.fillRect(bx+6,by+6,bw-12,bw-12);
     drawBug(X,id,bx+bw/2,by+(bw-12)/2+6,2.1);
     X.fillStyle='#303848';X.fillRect(bx+6,by+bw-6,bw-12,16);
-    T(BUGS[id].name,bx+bw/2,by+bw+6,5,'#303848','center');
+    T(BUGS[id].name,bx+bw/2,by+bw+5,6,'#f8f8e8','center');
+    drawTypeBadge(bx+bw/2-22,by+bw+11,BUGS[id].type);
     const b=BUGS[id],sY=by+bw+18;
     T(`HP  ${b.hp}`,bx+12,sY+14,6,'#303848');T(`ATK ${b.atk}`,bx+12,sY+28,6,'#c02020');
     T(`DEF ${b.def}`,bx+12,sY+42,6,'#2050b0');T(`SPD ${b.spd}`,bx+12,sY+56,6,'#109010');
     descs[id].forEach((l,li)=>T(l,bx+12,sY+76+li*14,4,'#607080'));
-    BTN(bx+8,by+bh-36,bw-16,28,'MINE!',()=>{G.loadout=[id];G.caught[id]=null;G.screen='world';resetMap(1);});
+    BTN(bx+8,by+bh-36,bw-16,28,'MINE!',()=>{G.loadout=[newCaughtInstance(id,5)];G.seen.add(id);G.screen='world';resetMap(1);sfx('select');});
   });
 }
 
@@ -1042,8 +1462,11 @@ function drawWorld(){
   const camX=p.visX-240+8,camY=p.visY-216+8;
 
   // Movement
-  if(G.moveDelay>0){G.moveDelay--;}
-  else{
+  // Movement — new step is triggered the moment the visual catches up to the
+  // current tile, so holding a direction produces unbroken motion.
+  if(G.moveDelay > 0) G.moveDelay--;
+  const visAtTile = Math.abs(p.visX - p.x) < 0.5 && Math.abs(p.visY - p.y) < 0.5;
+  if(visAtTile && G.moveDelay === 0){
     let dx=0,dy=0;
     if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
     else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
@@ -1053,25 +1476,39 @@ function drawWorld(){
       const nx=p.x+dx*TW,ny=p.y+dy*TW;
       const tx=Math.round(nx/TW),ty=Math.round(ny/TW);
       const tile=gt(G.zone,tx,ty);
-      if(walkable(tile)){
-        p.x=nx;p.y=ny;G.moveDelay=8;
+      const npc=getNPCAt(G.zone,tx,ty);
+      if(npc && !npc.defeated){
+        // Bump into trainer NPC — auto-trigger battle
+        G.moveDelay=12;
+        triggerTrainerBattle(npc);
+      } else if(npc && npc.defeated){
+        // talked-to defeated NPC — show dialog
+        G.moveDelay=12;
+        G.pcMsg = `${npc.name}:\n${npc.afterMsg||"Good fight! Catch ya later."}`;
+        G.pcMsgTimer = 140;
+      } else if(walkable(tile)){
+        p.x=nx;p.y=ny;
+        // No moveDelay set on normal walk — next step triggers when visual arrives
         if(isEncounter(tile)&&Math.random()<.13)triggerEnc();
         if(tile===6)doPortal(tx,ty);
         if(tile===11)enterPC();      // walk into PC door
         if(tile===12)exitPC();       // walk out of PC
         if(tile===13)tryTalkDesk();  // interact tile in front of desk
+        // Trainer line-of-sight check after every successful move
+        if(G.screen==='world') checkNPCLineOfSight();
       }
     }
   }
 
-  // Smooth visual position - lerp toward actual tile position
-  p.visX+=(p.x-p.visX)*0.35;
-  p.visY+=(p.y-p.visY)*0.35;
-  // Snap when very close
-  if(Math.abs(p.visX-p.x)<0.5) p.visX=p.x;
-  if(Math.abs(p.visY-p.y)<0.5) p.visY=p.y;
+  // Linear visual interpolation toward target tile — continuous motion when key held
+  const _spd = 3.2; // pixels per frame; 16px tile completes in ~5 frames
+  const _dx = p.x - p.visX, _dy = p.y - p.visY;
+  if(Math.abs(_dx) > 0.4) p.visX += Math.sign(_dx) * Math.min(_spd, Math.abs(_dx));
+  else p.visX = p.x;
+  if(Math.abs(_dy) > 0.4) p.visY += Math.sign(_dy) * Math.min(_spd, Math.abs(_dy));
+  else p.visY = p.y;
   // Tick walk frame continuously while moving
-  if(Math.abs(p.visX-p.x)>1||Math.abs(p.visY-p.y)>1) p.frame++;
+  if(Math.abs(p.visX-p.x)>=0.5 || Math.abs(p.visY-p.y)>=0.5) p.frame++;
 
   const curTile=gt(G.zone,Math.round(p.x/TW),Math.round(p.y/TW));
   const inWater=isWater(curTile);
@@ -1101,6 +1538,9 @@ function drawWorld(){
     drawDrMarshallSmall(X,drX,drY);
   }
 
+  // NPC trainers
+  drawNPCs(X, camX, camY);
+
   drawPlayer(X,p.visX-camX,p.visY-camY,p.dir,p.frame,inWater);
 
   // Hints - shown above bottom-left HUD, right-justified to avoid overlap
@@ -1123,6 +1563,31 @@ function drawWorld(){
 
   drawWorldHUD();
   BTN(348,4,128,26,'MENU',()=>G.screen='menu');
+
+  // RAKE button — shown in zone 2 water tiles when player has rake
+  if(G.zone===2&&G.inventory.lakeRake&&inWater){
+    BTN(348,36,128,26,'🪣 RAKE',()=>doRakeAction());
+  }
+
+  // Rake animation — spinning rake overlay
+  if(G.rake.anim>0){
+    G.rake.anim--;
+    const prog=1-(G.rake.anim/40);
+    const px2=G.player.visX-camX,py2=G.player.visY-camY;
+    X.save();
+    X.translate(px2,py2);
+    X.rotate(prog*Math.PI*2.5);
+    X.globalAlpha=Math.max(0,1-prog*1.5);
+    drawRakeSprite(X,0,0,1.4);
+    // Splash rings
+    X.globalAlpha=0.4*(1-prog);
+    X.strokeStyle='rgba(100,180,255,0.8)';X.lineWidth=2;
+    X.beginPath();X.arc(0,4,(prog*24)|0,0,Math.PI*2);X.stroke();
+    X.globalAlpha=1;
+    X.restore();
+  }
+
+  drawSaveToast();
 }
 
 function enterPC(){
@@ -1141,56 +1606,64 @@ function exitPC(){
 }
 
 function tryTalkDesk(){
-  // Heal all bugs in loadout to full HP
-  if(!G.bugHP) G.bugHP={};
-  G.loadout.forEach(id=>{G.bugHP[id]=BUGS[id].hp;});
-  G.battleParty=buildBattleParty();
-  G.pcMsg='Dr. Marshall:\nAll your bugs have been\nfully restored!';
-  G.pcMsgTimer=180;
+  // Heal every owned bug to its level-scaled max HP
+  G.loadout.forEach(inst => {
+    inst.maxHp = levelStats(inst.id, inst.level).hp;
+    inst.hp = inst.maxHp;
+  });
+  G.battleParty = buildBattleParty();
+  G.pcMsg = 'Dr. Marshall:\nAll your bugs have been\nfully restored!';
+  G.pcMsgTimer = 180; // ~3 seconds — auto-dismisses
+  sfx('heal');
 }
 
 function triggerEnc(){
-  const pool=Object.keys(BUGS).filter(id=>BUGS[id].zone===G.zone&&!BUGS[id].starter);
-  const ids2=pool.length?pool:Object.keys(BUGS).filter(id=>BUGS[id].zone===G.zone);
+  const pool=Object.keys(BUGS).filter(id=>BUGS[id].zone===G.zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly);
+  const ids2=pool.length?pool:Object.keys(BUGS).filter(id=>BUGS[id].zone===G.zone&&!BUGS[id].trainerOnly);
   const wid=ids2[Math.floor(Math.random()*ids2.length)];
-  G.battle={wild:makeBug(wid)};
+  const zl=zoneLevel(G.zone);
+  const wlvl=zl.min+Math.floor(Math.random()*(zl.max-zl.min+1));
+  G.battle={wild:makeBug(wid,{isWild:true,level:wlvl}),trainer:null};
   G.battleParty=buildBattleParty();
   if(!G.battleParty.length){G.battle=null;return;}
-  G.battleMsg=`A wild ${BUGS[wid].name}\nappeared!`;
+  G.battleMsg=`A wild Lv.${wlvl} ${BUGS[wid].name}\nappeared!`;
   G.battlePhase='action';G.pendingAction=null;
   G.btFlashP=0;G.btFlashE=0;G.btTick=0;G.swapMode=false;
   G.screen='battle';
+  sfx('encounter');
 }
 
 function doPortal(tx,ty){
   const p=G.player;
-  if(G.zone===1&&ty===TALL-2){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;resetMap(2);}
-  else if(G.zone===2&&ty===1){G.zone=1;p.x=14*TW;p.y=(TALL-3)*TW;resetMap(1);}
-  else if(G.zone===2&&ty===TALL-2){G.zone=3;p.x=14*TW;p.y=(TALL-3)*TW;resetMap(3);}
-  else if(G.zone===3&&ty===1){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;resetMap(2);}
+  // Always enter the new zone near the door that leads BACK.
+  // Southward entries land at the TOP (row 2), facing south.
+  // Northward entries land at the BOTTOM (row TALL-3), facing north.
+  if(G.zone===1&&ty===TALL-2){G.zone=2;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(2);sfx('portal');onEnterZone(2);}
+  else if(G.zone===2&&ty===1){G.zone=1;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(1);sfx('portal');}
+  else if(G.zone===2&&ty===TALL-2){G.zone=3;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(3);sfx('portal');}
+  else if(G.zone===3&&ty===1){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(2);sfx('portal');onEnterZone(2);}
   p.visX=p.x; p.visY=p.y;
+  G.moveDelay=14;
+  autoSave();
 }
 
 function drawWorldHUD(){
-  const lid=G.loadout[0];if(!lid)return;
-  const b=BUGS[lid];
-  // Top-left: lead bug name + HP
-  panel(4,4,200,46);T(G.caught[lid]||b.name,12,20,7,'#303848');
-  T('HP',12,34,6,'#607080');HPBAR(30,27,130,b.hp,b.hp);T(`${b.hp}/${b.hp}`,164,34,5,'#607080');
-  // Bottom-left: zone name + caught count — compact, just 2 lines
+  // Top-left lead-bug panel intentionally omitted —
+  // bug stats live in Loadout and Battle screens.
+  // Bottom-left: zone name + caught count
   if(G.zone!=='pc'){
     const zName=ZN[G.zone]||'';
     const zBugs=typeof G.zone==='number'?Object.keys(BUGS).filter(k=>BUGS[k].zone===G.zone):[];
-    const zC=zBugs.filter(k=>G.caught[k]!==undefined).length;
+    const zC=zBugs.filter(k=>G.seen.has(k)).length;
     const catchStr=zBugs.length?`Caught: ${zC}/${zBugs.length}`:'';
-    // Measure approximate text widths to size panel dynamically
     const panelW=148;
     panel(4,404,panelW,28);
     T(zName,10,418,6,'#303848');
     if(catchStr)T(catchStr,10,426,5,'#607080');
   } else {
     panel(4,404,190,28);
-    T('ENTOMOLOGY DEPT',10,418,6,'#2050a8');
+    T('FIELD LAB',10,418,6,'#2050a8');
+    T('press A at desk to heal',10,426,4,'#607080');
   }
 }
 
@@ -1212,95 +1685,422 @@ function drawBattle(){
   // Player bug platform (left) — raised higher so panel clears message box
   X.fillStyle='#a09050';X.fillRect(28,210,168,16);X.fillRect(31,226,162,6);
 
-  // Wild bug — sits on its platform
-  if(G.btFlashE>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashE--;}
-  drawBug(X,bt.wild.id,360,160,3.0);X.globalAlpha=1;
+  // Trainer intro animation — show trainer instead of wild bug; slide out, bug slides in
+  const isTrainerIntro = (G.battlePhase==='trainer-show'||G.battlePhase==='trainer-out'||G.battlePhase==='bug-in'||G.battlePhase==='trainer-defeat');
+  if(isTrainerIntro){
+    G.trainerAnimT = (G.trainerAnimT||0);
+    if(G.battlePhase==='trainer-show'){
+      // Static — trainer at platform
+      drawTrainerBattleSprite(X, 360, 200, G.battle.trainer.npc.sprite);
+    } else if(G.battlePhase==='trainer-out'){
+      G.trainerAnimT++;
+      const slideX = 360 + G.trainerAnimT * 18;
+      if(slideX < 600) drawTrainerBattleSprite(X, slideX, 200, G.battle.trainer.npc.sprite);
+      if(G.trainerAnimT >= 22){
+        G.trainerAnimT = 0;
+        G.battlePhase = 'bug-in';
+        G.battleMsg = `${G.battle.trainer.name} sent out\n${BUGS[bt.wild.id].name}!`;
+        sfx('encounter');
+      }
+    } else if(G.battlePhase==='bug-in'){
+      G.trainerAnimT++;
+      const bugX = 360 + (22 - G.trainerAnimT) * 18;
+      drawBug(X, bt.wild.id, bugX, 160, 3.0);
+      if(G.trainerAnimT >= 22){
+        G.trainerAnimT = 0;
+        G.battlePhase = 'action';
+        G.battleMsg = `What will ${dn(me)} do?`;
+      }
+    } else if(G.battlePhase==='trainer-defeat'){
+      // Trainer slides back in from the right
+      G.trainerAnimT = Math.min(22, (G.trainerAnimT||0) + 1);
+      const tx = 360 + (22 - G.trainerAnimT) * 18;
+      drawTrainerBattleSprite(X, tx, 200, G.battle.trainer.npc.sprite);
+    }
+  } else {
+    // Wild bug — sits on its platform
+    if(G.btFlashE>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashE--;}
+    drawBug(X,bt.wild.id,360,160,3.0);X.globalAlpha=1;
+  }
 
   // Player bug — raised, well above message box at y=270
   if(G.btFlashP>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashP--;}
   drawBug(X,me.id,110,175,3.0,true);X.globalAlpha=1;
 
-  // Wild panel — top right
-  panel(260,4,198,56,'#f0ece0');T(dn(bt.wild),268,20,6,'#303848');T('HP/',268,36,6,'#607080');HPBAR(298,30,124,bt.wild.hp,bt.wild.maxHp);T(`${bt.wild.hp}/${bt.wild.maxHp}`,432,44,5,'#607080','right');
+  // Wild panel — top right (only when bug is on field)
+  if(!isTrainerIntro || G.battlePhase==='bug-in'){
+    panel(260,4,198,56,'#f0ece0');
+    const enemyLabel = (G.battle.trainer?'':' Enemy ') + dn(bt.wild);
+    T(G.battle.trainer?dn(bt.wild):`Enemy ${dn(bt.wild)}`,268,20,6,'#303848');
+    T(`Lv.${bt.wild.level||1}`,452,20,6,'#303848','right');
+    drawTypeBadge(268,28,bt.wild.type);
+    T('HP/',268,52,5,'#607080');HPBAR(298,46,150,bt.wild.hp,bt.wild.maxHp);
+    T(`${bt.wild.hp}/${bt.wild.maxHp}`,452,58,5,'#607080','right');
+  } else {
+    // Trainer name plate during intro
+    panel(260,4,198,56,'#f0ece0');
+    T('TRAINER',268,20,6,'#c02020');
+    T(G.battle.trainer.name,268,40,7,'#303848');
+  }
   // Player panel — ends at y=266, just above message box at y=270
-  panel(14,226,204,42,'#f0ece0');T(dn(me),22,240,6,'#303848');T('HP/',22,254,6,'#607080');HPBAR(52,248,120,me.hp,me.maxHp);T(`${me.hp}/${me.maxHp}`,188,260,5,'#607080','right');
+  panel(14,226,204,42,'#f0ece0');
+  T(dn(me),22,238,6,'#303848');
+  T(`Lv.${me.level||1}`,212,238,5,'#303848','right');
+  drawTypeBadge(22,242,me.type);
+  T('HP/',74,254,5,'#607080');HPBAR(96,248,100,me.hp,me.maxHp);
+  T(`${me.hp}/${me.maxHp}`,212,260,5,'#607080','right');
   bp.forEach((bug,i)=>{const dotX=22+i*14,dotY=264;X.fillStyle=bug.hp<=0?'#707070':bug.hp<bug.maxHp*.3?'#f83830':'#58d838';X.beginPath();X.arc(dotX,dotY,4,0,Math.PI*2);X.fill();X.strokeStyle='#303848';X.lineWidth=1;X.stroke();});
   // Message box
   panel(0,270,480,80,'#f0ece0');
-  G.battleMsg.split('\n').slice(0,3).forEach((l,i)=>T(l,16,294+i*22,7,'#303848'));
+  G.battleMsg.split('\n').slice(0,4).forEach((l,i)=>T(l,16,290+i*18,6,'#303848'));
   // Actions
-  if(G.swapMode){drawSwapMenu();}
+  if(G.swapMode||G.battlePhase==='swap'){drawSwapMenu();return;}
+  else if(G.battlePhase==='trainer-show'){
+    panel(0,350,480,82,'#e8e0d0');
+    BTN(300,362,176,56,'NEXT →',()=>{sfx('menu');G.battlePhase='trainer-out';G.trainerAnimT=0;});
+    T('A = next',14,420,5,'#909898');
+  }
+  else if(G.battlePhase==='trainer-out'||G.battlePhase==='bug-in'){
+    panel(0,350,480,82,'#e8e0d0'); // empty box during animation
+  }
+  else if(G.battlePhase==='trainer-defeat'){
+    panel(0,350,480,82,'#e8e0d0');
+    const label = G.pendingReward ? 'CLAIM REWARD →' : 'CONTINUE →';
+    BTN(220, 362, 256, 56, label, () => {
+      sfx('menu');
+      if(G.pendingReward){
+        G.screen = 'reward';
+      } else {
+        if(G.battle && G.battle.trainer) G.battle.trainer.npc.defeated = true;
+        G.battlePhase = 'over';
+        G.battleMsg = (G.battle && G.battle.trainer ? G.battle.trainer.name : 'Trainer') + ' was defeated!';
+      }
+    });
+    T('A = next', 14, 420, 5, '#909898');
+  }
   else if(G.battlePhase==='action'){
     panel(0,350,480,82,'#e8e0d0');
     T(`What will ${dn(me)} do?`,14,374,7,'#303848');
-    BTN(244,352,114,36,'FIGHT',()=>G.battlePhase='move');BTN(362,352,114,36,'NET',()=>doNet());
-    BTN(244,392,114,34,'SWAP',()=>startSwap());BTN(362,392,114,34,'RUN',()=>doRun());
+    BTN(244,352,114,36,'FIGHT',()=>{sfx('menu');G.battlePhase='move';});
+    BTN(362,352,114,36,G.battle.trainer?'NET×':'NET',()=>{sfx('menu');doNet();});
+    BTN(244,392,114,34,'SWAP',()=>{sfx('menu');startSwap();});
+    BTN(362,392,114,34,G.battle.trainer?'RUN×':'RUN',()=>{sfx('menu');doRun();});
   } else if(G.battlePhase==='move'){
     panel(0,350,480,82,'#e8e0d0');
     T('B = back',14,364,5,'#909898');
-    me.moves.forEach((mv,i)=>BTN(4+(i%2)*238,360+Math.floor(i/2)*34,230,28,mv,()=>doMove(mv)));
+    me.moves.forEach((mv,i)=>{
+      const bx=4+(i%2)*238, by=360+Math.floor(i/2)*34, bw=230, bh=28;
+      const m=MOVES[mv], mt=m&&m.t;
+      BTN(bx,by,bw,bh,mv,()=>{sfx('menu');doMove(mv);});
+      if(mt){
+        const bg=TYPE_COLORS[mt]||'#707070';
+        X.fillStyle=bg;X.fillRect(bx+bw-46,by+6,40,16);
+        X.fillStyle='rgba(255,255,255,0.22)';X.fillRect(bx+bw-45,by+7,38,5);
+        T(mt,bx+bw-26,by+18,5,'#f8f8e8','center');
+      }
+    });
   } else if(G.battlePhase==='result'){
-    panel(0,350,480,82,'#e8e0d0');BTN(340,362,136,28,'NEXT →',()=>afterResult());
+    panel(0,350,480,82,'#e8e0d0');
+    BTN(340,362,136,56,'NEXT →',()=>{sfx('menu');afterResult();});
+    T('A = next',14,420,5,'#909898');
   } else if(G.battlePhase==='over'){
-    panel(0,350,480,82,'#e8e0d0');BTN(300,362,176,28,'RETURN',()=>endBattle());
+    panel(0,350,480,82,'#e8e0d0');
+    BTN(300,362,176,56,'RETURN',()=>{sfx('menu');endBattle();});
+    T('A = return',14,420,5,'#909898');
   }
 }
-function startSwap(){if(G.battleParty.filter(b=>b.hp>0).length<=1){G.battleMsg='No other bugs\nto swap to!';return;}G.swapMode=true;}
-function drawSwapMenu(){
-  panel(0,350,480,82,'#e0d8c8');T('Send out which bug?',14,370,7,'#303848');
-  G.battleParty.slice(0,6).forEach((bug,i)=>{const bx=4+(i%3)*158,by=380;const isA=i===0,fd=bug.hp<=0;BTN(bx,by,150,26,`${dn(bug)} ${bug.hp}/${bug.maxHp}`,(isA||fd)?null:()=>swapBug(i),isA,fd);});
-  BTN(4,406,100,22,'← BACK',()=>G.swapMode=false);
+function startSwap(forced){
+  if(!forced && G.battleParty.filter(b=>b.hp>0).length<=1){
+    G.battleMsg='No other bugs\nto swap to!';return;
+  }
+  G.swapMode=forced?'forced':'voluntary';
 }
-function swapBug(idx){const bp=G.battleParty,t=bp.splice(idx,1)[0];bp.unshift(t);G.swapMode=false;G.battlePhase='action';G.battleMsg=`Go, ${dn(t)}!`;}
-function autoSwap(){const idx=G.battleParty.findIndex((b,i)=>i>0&&b.hp>0);if(idx===-1)return false;const t=G.battleParty.splice(idx,1)[0];G.battleParty.unshift(t);G.battleMsg=`${dn(G.battleParty[1]||G.battleParty[0])} fainted!\nGo, ${dn(t)}!`;return true;}
-function calcDmg(baseDmg,isCrit){
+function drawSwapMenu(){
+  // Full-screen popup over battle
+  const forced=(G.swapMode==='forced');
+  // Dark overlay
+  X.fillStyle='rgba(0,0,30,0.82)';X.fillRect(0,0,480,432);
+  // Header
+  panel(12,10,456,30,'#f0ece0');
+  T(forced?'Choose your next bug!':'Send out which bug?',240,28,7,'#303848','center');
+
+  const party=G.battleParty;
+  const cols=2, rows=Math.ceil(Math.min(party.length,6)/cols);
+  const cardW=224, cardH=90, padX=12, padY=46;
+
+  party.slice(0,6).forEach((bug,i)=>{
+    const col=i%cols, row=Math.floor(i/cols);
+    const bx=padX+col*(cardW+8);
+    const by=padY+row*(cardH+6);
+    const isActive=i===0;
+    const fainted=bug.hp<=0;
+    const canPick=!isActive&&!fainted&&!forced||(!isActive&&!fainted&&forced);
+
+    // Card bg
+    X.fillStyle=fainted?'#282030':isActive?'#1a3050':'#1a2840';
+    X.fillRect(bx,by,cardW,cardH);
+    X.strokeStyle=fainted?'#503050':isActive?'#60a8ff':'#4a6890';
+    X.lineWidth=2; X.strokeRect(bx+1,by+1,cardW-2,cardH-2);
+
+    // Bug sprite
+    const spriteX=bx+32, spriteY=by+cardH/2+8;
+    if(fainted){ X.globalAlpha=0.35; }
+    drawBug(X,bug.id,spriteX,spriteY,1.6);
+    X.globalAlpha=1;
+
+    // Name + level
+    const nameCol=fainted?'#806080':isActive?'#90c8ff':'#e8e0d0';
+    T(dn(bug),bx+68,by+18,6,nameCol);
+    T(`Lv.${bug.level||1}`,bx+cardW-8,by+18,5,'#a0b8d0','right');
+
+    // Type badge
+    const tc=TYPE_COLORS[BUGS[bug.id]?.type]||'#606070';
+    X.fillStyle=tc;X.fillRect(bx+68,by+24,40,12);
+    X.fillStyle='rgba(255,255,255,0.2)';X.fillRect(bx+68,by+24,40,4);
+    T(BUGS[bug.id]?.type||'',bx+88,by+34,4,'#f8f8e8','center');
+
+    // HP bar
+    const hpPct=Math.max(0,bug.hp/bug.maxHp);
+    X.fillStyle='#181820';X.fillRect(bx+68,by+42,cardW-76,7);
+    X.fillStyle=hpPct>.5?'#40cc30':hpPct>.25?'#d8c820':'#cc3020';
+    X.fillRect(bx+68,by+42,(cardW-76)*hpPct|0,7);
+    T(`${bug.hp}/${bug.maxHp}`,bx+68,by+58,5,'#a0b8d0');
+
+    // Stats row
+    T(`ATK:${bug.atk} DEF:${bug.def} SPD:${bug.spd}`,bx+68,by+72,4,'#708098');
+
+    // Status label
+    if(fainted)    T('FAINTED',bx+cardW-8,by+72,5,'#c04040','right');
+    else if(isActive&&!forced) T('ACTIVE',bx+cardW-8,by+72,5,'#60a0ff','right');
+
+    // Click target
+    if(canPick){
+      G.buttons.push({x:bx,y:by,w:cardW,h:cardH,label:`swap${i}`,action:()=>{sfx('menu');swapBug(i);}});
+      // Hover highlight
+      if(G.hovered===`swap${i}`){
+        X.strokeStyle='#f8e050';X.lineWidth=2.5;X.strokeRect(bx+1,by+1,cardW-2,cardH-2);
+      }
+    }
+  });
+
+  // Cancel button — only shown for voluntary swap
+  if(!forced){
+    BTN(160,418,160,26,'← CANCEL',()=>{G.swapMode=false;});
+  } else {
+    X.fillStyle='rgba(255,255,200,0.7)';
+    X.font=fontReady?'5px PF':'bold 8px monospace';
+    X.textAlign='center';X.fillText('You must choose — no going back!',240,428);
+  }
+}
+function swapBug(idx){
+  const bp=G.battleParty,t=bp.splice(idx,1)[0];
+  bp.unshift(t);
+  const wasForced=(G.swapMode==='forced');
+  G.swapMode=false;
+  const wild=G.battle.wild;
+  if(!wasForced && wild.hp>0){
+    // Voluntary swap costs a turn — enemy attacks
+    const em=wild.moves[Math.floor(Math.random()*wild.moves.length)],emv=MOVES[em];
+    let emsg='';
+    if(emv&&emv.p>0){
+      if(Math.random()<emv.a){
+        const ecrit=Math.random()<0.1;
+        const er=calcDmg(emv.p,ecrit,wild,t,emv.t);
+        t.hp=Math.max(0,t.hp-er.dmg);G.btFlashP=20;
+        sfx(ecrit?'crit':'hit');
+        const eff=er.typeMult>1?'\nSuper effective!':'';
+        emsg=`${dn(wild)} used ${em}!`+(ecrit?' CRIT!':'')+`\nHit for ${er.dmg}!`+eff;
+      } else { sfx('miss'); emsg=`${dn(wild)} used ${em}!\nMissed!`; }
+    } else { sfx('buff'); emsg=`${dn(wild)} used ${em}!`; }
+    G.battleMsg=`Go, ${dn(t)}!\n${emsg}`;
+    G.battlePhase='result';
+    G.pendingAction=t.hp<=0?(G.battleParty.some((b,i2)=>i2>0&&b.hp>0)?'autoswap':'lose'):'continue';
+    if(t.hp<=0)sfx('faint');
+  } else {
+    // Forced swap (after faint) — free switch, no enemy attack
+    G.battlePhase='action';
+    G.battleMsg=`Go, ${dn(t)}!`;
+  }
+}
+// autoSwap now asks the PLAYER to choose instead of picking automatically
+function autoSwap(){
+  const alive=G.battleParty.filter((b,i)=>i>0&&b.hp>0);
+  if(alive.length===0) return false;
+  // Trigger forced-choice popup
+  G.swapMode='forced';
+  G.battlePhase='swap'; // special phase — renders swap menu over battle
+  G.battleMsg=`${dn(G.battleParty[0])} fainted!\nChoose your next bug!`;
+  return true;
+}
+function calcDmg(baseDmg,isCrit,attacker,defender,moveType){
   // Each move has a fixed base damage (7-12 range), plus crit
-  const roll=baseDmg+Math.floor(Math.random()*4)-1; // ±1-2 variance
-  if(isCrit) return Math.floor(roll*1.5);
-  return roll;
+  let roll=baseDmg+Math.floor(Math.random()*4)-1; // ±1-2 variance
+  // Level scaling: each level above 1 adds ~5% damage
+  if(attacker&&attacker.level) roll = roll * (1 + (attacker.level-1)*0.05);
+  // DEF dampening
+  if(defender&&defender.def) roll = roll * (10/(10+defender.def*0.18));
+  // Type bonus 1.5x when moveType beats defender.type
+  let typeMult=1;
+  if(moveType && defender && defender.type && TYPE_BEATS[moveType]===defender.type) typeMult=1.5;
+  roll = roll * typeMult;
+  if(isCrit) roll = roll*1.5;
+  return{dmg:Math.max(1,Math.round(roll)), typeMult};
 }
 function doMove(mv){
-  const me=G.battleParty[0],wild=G.battle.wild,m=MOVES[mv];
-  G.battlePhase='result';let msg='';
-  if(m&&m.p>0){
-    if(Math.random()<m.a){
-      const crit=Math.random()<0.1;
-      const dmg=calcDmg(m.p,crit);
-      wild.hp=Math.max(0,wild.hp-dmg);G.btFlashE=20;
-      msg=`${dn(me)} used ${mv}!`+(crit?'\nCritical hit! ':'\n')+`Dealt ${dmg} damage!`;
-    } else msg=`${dn(me)} used ${mv}!\nBut it missed!`;
-  } else if(m){
-    if(m.e==='def+'){me.db=(me.db||0)+1;msg=`${dn(me)}'s DEF rose!`;}
-    else if(m.e==='spd+'){me.sb=(me.sb||0)+1;msg=`${dn(me)}'s SPD rose!`;}
-    else if(m.e==='evade'){me.ev=(me.ev||0)+1;msg=`${dn(me)} got evasive!`;}
-    else msg=`${dn(me)} used ${mv}!`;
+  const me = G.battleParty[0], wild = G.battle.wild, m = MOVES[mv];
+  G.battlePhase = 'result';
+
+  // ── Per-side attack helpers — return a short result message ──
+  function performAttack(attacker, defender, moveName, moveDef, isPlayer){
+    if(attacker.hp <= 0) return ''; // can't act if KO'd
+    if(!moveDef){ return `${dn(attacker)} used ${moveName}!`; }
+    if(moveDef.p > 0){
+      // Damaging move
+      if(Math.random() < moveDef.a){
+        const crit = Math.random() < 0.1;
+        const r = calcDmg(moveDef.p, crit, attacker, defender, moveDef.t);
+        defender.hp = Math.max(0, defender.hp - r.dmg);
+        if(isPlayer) G.btFlashE = 20; else G.btFlashP = 20;
+        sfx(crit ? 'crit' : 'hit');
+        const eff = r.typeMult > 1 ? ' SUPER!' : '';
+        return `${dn(attacker)} used ${moveName}!` + (crit ? ' CRIT!' : '') + eff +
+               `\nDealt ${r.dmg} dmg.`;
+      } else {
+        sfx('miss');
+        return `${dn(attacker)} used ${moveName}!\nBut it missed!`;
+      }
+    } else {
+      // Status move
+      sfx('buff');
+      if(moveDef.e === 'def+'){ attacker.db = (attacker.db||0)+1; return `${dn(attacker)}'s DEF rose!`; }
+      if(moveDef.e === 'spd+'){ attacker.sb = (attacker.sb||0)+1; return `${dn(attacker)}'s SPD rose!`; }
+      if(moveDef.e === 'evade'){ attacker.ev = (attacker.ev||0)+1; return `${dn(attacker)} got evasive!`; }
+      if(moveDef.e === 'espd-'){ defender.sb = (defender.sb||0)-1; return `${dn(defender)}'s SPD fell!`; }
+      return `${dn(attacker)} used ${moveName}!`;
+    }
   }
-  if(wild.hp<=0){G.battleMsg=msg+`\n${dn(wild)} fainted!`;G.pendingAction='win';return;}
-  const em=wild.moves[Math.floor(Math.random()*wild.moves.length)],emv=MOVES[em];
-  let emsg='';
-  if(emv&&emv.p>0){
-    if(Math.random()<emv.a){
-      const ecrit=Math.random()<0.1;
-      const edmg=calcDmg(emv.p,ecrit);
-      me.hp=Math.max(0,me.hp-edmg);G.btFlashP=20;
-      emsg=`${dn(wild)} used ${em}!`+(ecrit?'\nCritical hit! ':'\n')+`Hit for ${edmg}!`;
-    } else emsg=`${dn(wild)} used ${em}!\nMissed!`;
-  } else emsg=`${dn(wild)} used ${em}!`;
-  G.battleMsg=msg+'\n'+emsg;
-  G.pendingAction=me.hp<=0?(G.battleParty.some((b,i)=>i>0&&b.hp>0)?'autoswap':'lose'):'continue';
+
+  // Pick the enemy's move now (random) so we know its type & damage
+  const em = wild.moves[Math.floor(Math.random()*wild.moves.length)];
+  const emv = MOVES[em];
+
+  // ── Turn order by effective SPD (with the sb/db boosts factored in) ──
+  const meSpd   = (me.spd || 0)   * (1 + (me.sb||0)   * 0.30);
+  const wildSpd = (wild.spd || 0) * (1 + (wild.sb||0) * 0.30);
+  const meFirst = (meSpd > wildSpd) || (meSpd === wildSpd && Math.random() < 0.5);
+
+  let line1 = '', line2 = '';
+  if(meFirst){
+    line1 = performAttack(me, wild, mv, m, true);
+    if(wild.hp <= 0){
+      G.battleMsg = line1 + `\n${dn(wild)} fainted!`;
+      G.pendingAction = 'win';
+      sfx('faint');
+      return;
+    }
+    line2 = performAttack(wild, me, em, emv, false);
+  } else {
+    line1 = performAttack(wild, me, em, emv, false);
+    if(me.hp <= 0){
+      // Player KO'd before they could move
+      G.battleMsg = line1 + `\n${dn(me)} fainted!`;
+      G.pendingAction = G.battleParty.some((b,i)=>i>0 && b.hp>0) ? 'autoswap' : 'lose';
+      sfx('faint');
+      return;
+    }
+    line2 = performAttack(me, wild, mv, m, true);
+    if(wild.hp <= 0){
+      G.battleMsg = line1 + '\n' + line2 + `\n${dn(wild)} fainted!`;
+      G.pendingAction = 'win';
+      sfx('faint');
+      return;
+    }
+  }
+  G.battleMsg = line1 + '\n' + line2;
+  if(me.hp <= 0){
+    G.pendingAction = G.battleParty.some((b,i)=>i>0 && b.hp>0) ? 'autoswap' : 'lose';
+    sfx('faint');
+  } else {
+    G.pendingAction = 'continue';
+  }
 }
 function afterResult(){
-  if(G.pendingAction==='win'){G.battlePhase='over';G.battleMsg='You won!';return;}
-  if(G.pendingAction==='autoswap'){autoSwap();G.battlePhase='result';G.pendingAction='continue';return;}
+  if(G.pendingAction==='win'){
+    G.battlePhase='over';
+    // Award XP to lead bug (and split with party survivors)
+    const wild=G.battle.wild;
+    const xpGain = Math.max(4, Math.round(wild.maxHp/3 + (wild.level||1)*2));
+    awardXP(G.battleParty[0], xpGain);
+    G.battleMsg = `You won!\n${dn(G.battleParty[0])} gained ${xpGain} XP!` + (G.lvlUpMsg||'');
+    G.lvlUpMsg='';
+    // Trainer battle: advance to next bug
+    if(G.battle.trainer){
+      const tr=G.battle.trainer;
+      tr.idx++;
+      if(tr.idx<tr.team.length){
+        // Send next trainer bug
+        const nb=tr.team[tr.idx];
+        G.battle.wild = makeBug(nb.id,{isWild:true,level:nb.lvl});
+        G.battleMsg += `\n${tr.name} sent out ${BUGS[nb.id].name}!`;
+        G.battlePhase='result'; G.pendingAction='continue';
+        return;
+      } else {
+        // All trainer bugs defeated — switch to trainer-defeat dialog phase.
+        // Don't mark NPC defeated yet; we'll do that after the player sees the reward screen.
+        G.battlePhase = 'trainer-defeat';
+        G.trainerAnimT = 0;
+        G.pendingReward = tr.rewardId || null;
+        G.battleMsg = tr.name + ':\n' + (tr.npc.afterMsg || ('Good fight!\nTake my ' + (tr.rewardId ? BUGS[tr.rewardId].name : 'thanks!') + '.'));
+        return;
+      }
+    }
+    sfx('win');
+    return;
+  }
+  if(G.pendingAction==='autoswap'){
+    autoSwap(); // sets phase to 'swap' and shows picker
+    return;
+  }
   if(G.pendingAction==='lose'){
-    // Bug fainted - no auto-heal. Just end the battle.
-    G.battlePhase='over';G.battleMsg=`${dn(G.battleParty[0])} fainted!\nHead to the Pokemon\nCenter to heal.`;
+    G.battlePhase='over';G.battleMsg=`${dn(G.battleParty[0])} fainted!\nHead to the Field Lab\nto heal up.`;
     return;
   }
   if(G.pendingAction==='caught'){G.battlePhase='over';G.battleMsg='Bug added to Bugdex!';return;}
   G.battlePhase='action';G.battleMsg='What will you do?';
 }
+function awardXP(battleBug, amount){
+  // Award XP to the specific battle-bug INSTANCE (not species).
+  const inst = battleBug._instRef;
+  if(!inst) return;
+  inst.xp += amount;
+  let lvls = 0;
+  while(inst.xp >= xpForLevel(inst.level)){
+    inst.xp -= xpForLevel(inst.level);
+    inst.level++;
+    lvls++;
+  }
+  if(lvls > 0){
+    const oldMax = inst.maxHp;
+    const ns = levelStats(inst.id, inst.level);
+    inst.maxHp = ns.hp;
+    inst.hp = Math.min(inst.maxHp, inst.hp + (inst.maxHp - oldMax));
+    // Mirror to the live battle bug
+    battleBug.level = inst.level;
+    battleBug.maxHp = inst.maxHp;
+    battleBug.hp = inst.hp;
+    battleBug.atk = ns.atk;
+    battleBug.def = ns.def;
+    battleBug.spd = ns.spd;
+    G.lvlUpMsg = '\n' + dn(battleBug) + ' grew to Lv.' + inst.level + '!';
+    sfx('levelup');
+  }
+}
 function doNet(){
+  if(G.battle.trainer){
+    G.battleMsg=`Can't net ${G.battle.trainer.name}'s bug!\nThat would be stealing.`;
+    G.battlePhase='result'; G.pendingAction='continue';
+    return;
+  }
   const wild=G.battle.wild,pct=wild.hp/wild.maxHp;
   const rate=pct<.25?.90:pct<.5?.60:pct<.75?.28:.07;
   G.battlePhase='result';
@@ -1308,20 +2108,36 @@ function doNet(){
     G.pendingAction='caught';
     const bugName=BUGS[wild.id]?BUGS[wild.id].name:wild.id;
     G.battleMsg=`Gotcha!\n${bugName} was caught!`;
-    G.naming=true;G.nameTarget={id:wild.id,capturedHp:wild.hp};G.nameStr='';
+    sfx('catch');
+    G.naming=true;G.nameTarget={id:wild.id,capturedHp:wild.hp,capturedLevel:wild.level||1};G.nameStr='';
   } else {
-    const edmg=calcDmg(8,false);
-    G.battleParty[0].hp=Math.max(0,G.battleParty[0].hp-edmg);G.btFlashP=20;
-    G.battleMsg=`${BUGS[wild.id].name} broke free!\nHit back for ${edmg}!`;
+    sfx('catchfail');
+    const er=calcDmg(8,false,wild,G.battleParty[0],null);
+    G.battleParty[0].hp=Math.max(0,G.battleParty[0].hp-er.dmg);G.btFlashP=20;
+    G.battleMsg=`${BUGS[wild.id].name} broke free!\nHit back for ${er.dmg}!`;
     G.pendingAction=G.battleParty[0].hp<=0?(G.battleParty.some((b,i)=>i>0&&b.hp>0)?'autoswap':'lose'):'continue';
   }
 }
-function doRun(){G.battlePhase='over';G.battleMsg='Got away safely!';}
-function endBattle(){saveBattleHP();if(G.naming){G.screen='naming';return;}G.screen='world';checkUnlocks();}
+function doRun(){
+  if(G.battle.trainer){G.battleMsg=`You can't run\nfrom ${G.battle.trainer.name}!`;G.battlePhase='result';G.pendingAction='continue';return;}
+  G.battlePhase='over';G.battleMsg='Got away safely!';sfx('menu');
+}
+function endBattle(){saveBattleHP();if(G.naming){G.screen='naming';return;}G.screen='world';autoSave();checkUnlocks();}
 function checkUnlocks(){
   const z=typeof G.zone==='number'?G.zone:G.prevZone||1;
-  if(z===1&&G.zoneCaught[1]>=3&&!G.unlockedZones.has(2)){G.unlockedZones.add(2);resetMap(1);G.unlockMsg='3 bugs caught!\nMURKY POND unlocked.\nHead south!';G.screen='unlock';}
-  else if(z===2&&G.zoneCaught[2]>=3&&!G.unlockedZones.has(3)){G.unlockedZones.add(3);resetMap(2);G.unlockMsg='3 pond bugs caught!\nMUSHROOM HOLLOW unlocked!\nHead south!';G.screen='unlock';}
+  function zoneCleared(zn){
+    const zoneNPCs = NPCS.filter(n=>n.zone===zn);
+    return zoneNPCs.length>0 && zoneNPCs.every(n=>n.defeated);
+  }
+  if(z===1 && zoneCleared(1) && !G.unlockedZones.has(2)){
+    G.unlockedZones.add(2);resetMap(1);
+    G.unlockMsg='Zone 1 cleared!\nBoth trainers beaten.\nMURKY POND unlocked.\nHead south!';
+    G.screen='unlock';
+  } else if(z===2 && zoneCleared(2) && !G.unlockedZones.has(3)){
+    G.unlockedZones.add(2);G.unlockedZones.add(3);resetMap(2);
+    G.unlockMsg='Zone 2 cleared!\nMUSHROOM HOLLOW unlocked.\nHead south!';
+    G.screen='unlock';
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1338,16 +2154,16 @@ function drawNaming(){
   BTN(242,368,130,30,'CONFIRM',()=>confirmName());BTN(380,368,80,30,'SKIP',()=>confirmName(true));
 }
 function confirmName(skip=false){
-  const tgt=G.nameTarget;if(!tgt)return;
-  const nick=skip?null:(G.nameStr.trim()||null);
-  G.caught[tgt.id]=nick;
-  // Save caught bug at the HP it had when caught (from battle wild instance)
-  if(!G.bugHP) G.bugHP={};
-  if(tgt.capturedHp!==undefined) G.bugHP[tgt.id]=tgt.capturedHp;
-  const bz=BUGS[tgt.id].zone;
-  G.zoneCaught[bz]=Object.keys(BUGS).filter(id=>BUGS[id].zone===bz&&G.caught[id]!==undefined).length;
-  if(!G.loadout.includes(tgt.id))G.loadout.push(tgt.id);
-  G.naming=false;G.nameTarget=null;G.nameStr='';G.screen='world';checkUnlocks();
+  const tgt = G.nameTarget;
+  if(!tgt) return;
+  const nick = skip ? null : (G.nameStr.trim() || null);
+  const level = tgt.capturedLevel || 1;
+  const inst = newCaughtInstance(tgt.id, level, {nickname: nick, hp: tgt.capturedHp});
+  G.loadout.push(inst);
+  G.seen.add(tgt.id);
+  G.naming = false; G.nameTarget = null; G.nameStr = '';
+  G.screen = 'world';
+  checkUnlocks();
 }
 
 // ═══════════════════════════════════════════════
@@ -1355,10 +2171,120 @@ function confirmName(skip=false){
 // ═══════════════════════════════════════════════
 function drawMenu(){
   X.fillStyle='#1a1a2a';X.fillRect(0,0,480,432);
-  panel(80,40,320,310,'#f8f8e8');T('MENU',240,70,10,'#303848','center');
-  BTN(112,88,256,44,'BUGDEX',()=>{G.prevScreen='menu';G.screen='bugdex';});
-  BTN(112,140,256,44,'LOADOUT',()=>{G.prevScreen='menu';G.screen='loadout';});
-  BTN(112,192,256,44,'BACK TO WORLD',()=>G.screen='world');
+  panel(80,30,320,380,'#f8f8e8');T('MENU',240,60,10,'#303848','center');
+  BTN(112,80,256,40,'BUGDEX',()=>{G.prevScreen='menu';G.screen='bugdex';});
+  BTN(112,128,256,40,'LOADOUT',()=>{G.prevScreen='menu';G.screen='loadout';});
+  BTN(112,176,256,40,'FIELD KIT',()=>{G.prevScreen='menu';G.screen='gear';});
+  BTN(112,224,256,40,'💾 SAVE GAME',()=>{
+    _saveScreen.mode='save';
+    _saveScreen.confirmDelete=null;
+    G.screen='title_saves';
+  });
+  BTN(112,272,256,40,'BACK TO WORLD',()=>G.screen='world');
+  T('Auto-saves on catch & zone change',240,338,5,'#909898','center');
+  drawSaveToast();
+}
+
+// ═══════════════════════════════════════════════
+// FIELD KIT — gear customization
+// ═══════════════════════════════════════════════
+const GEAR_OPTIONS = {
+  hat: [
+    {id:'cap',    label:'RED CAP'},
+    {id:'safari', label:'PITH HELMET'},
+    {id:'straw',  label:'STRAW HAT'},
+    {id:'beanie', label:'BEANIE'},
+    {id:'none',   label:'BARE-HEADED'},
+  ],
+  jacket: [
+    {id:'red',      label:'RED JACKET'},
+    {id:'vest',     label:'POCKET VEST'},
+    {id:'raincoat', label:'RAINCOAT'},
+    {id:'field',    label:'FIELD COAT'},
+  ],
+  pants: [
+    {id:'jeans', label:'BLUE JEANS'},
+    {id:'khaki', label:'KHAKI CARGO'},
+    {id:'brown', label:'BROWN TROUSERS'},
+  ],
+  tool: [
+    {id:'backpack',  label:'BACKPACK'},
+    {id:'net',       label:'BUG NET'},
+    {id:'jar',       label:'SPECIMEN JAR'},
+    {id:'magnifier', label:'MAGNIFIER'},
+  ],
+};
+const GEAR_SLOT_LABELS = {hat:'HAT', jacket:'JACKET', pants:'PANTS', tool:'GEAR'};
+function drawGear(){
+  // Background
+  X.fillStyle='#1a221a'; X.fillRect(0,0,480,432);
+  // Decorative scanlines / corkboard feel
+  for(let y=0;y<432;y+=4){
+    X.fillStyle = (y/4)%2===0 ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.04)';
+    X.fillRect(0,y,480,2);
+  }
+  // Header
+  panel(0,0,480,32,'#f8f8e8');
+  T('FIELD KIT',240,22,10,'#303848','center');
+  T('Customize your bug-catcher loadout',240,30,4,'#607080','center');
+
+  // ── Player preview (left column) ──
+  panel(12,40,150,210,'#e8e0d0');
+  T('PREVIEW',86,58,6,'#303848','center');
+  // Stand player on a small pedestal at scale 2.4
+  X.fillStyle='#c8b878'; X.fillRect(40,210,92,8);
+  X.fillStyle='#a89858'; X.fillRect(40,218,92,4);
+  // Big sprite — draw twice the size by using a higher-res transformation
+  X.save();
+  X.translate(86, 200);
+  X.scale(2.4, 2.4);
+  drawPlayer(X, 0, 0, 2, Math.floor(G.tick/8)*2, false);
+  X.restore();
+  // Rotate preview button (cycles directions)
+  // (kept simple — the preview faces forward; could later add a direction toggle)
+
+  // ── Options panel (right column) ──
+  const colX = 174, colW = 294;
+  panel(colX, 40, colW, 350, '#f4ecd8');
+  let yCursor = 50;
+  Object.keys(GEAR_OPTIONS).forEach((slot)=>{
+    const slotLabel = GEAR_SLOT_LABELS[slot];
+    const opts = GEAR_OPTIONS[slot];
+    // Slot heading
+    X.fillStyle='#303848'; X.fillRect(colX+6, yCursor, colW-12, 16);
+    T(slotLabel, colX+12, yCursor+12, 7, '#f8f8e8');
+    T('current: ' + (G.gear[slot]||opts[0].id).toUpperCase(), colX+colW-12, yCursor+12, 5, '#c8c8a0', 'right');
+    yCursor += 20;
+    // Option pills — wrap into rows
+    const pillH = 22, pillGap = 4, pillsPerRow = 2;
+    const pillW = (colW - 12 - pillGap*(pillsPerRow-1)) / pillsPerRow;
+    opts.forEach((opt, idx)=>{
+      const col = idx % pillsPerRow;
+      const row = Math.floor(idx / pillsPerRow);
+      const px = colX + 6 + col * (pillW + pillGap);
+      const py = yCursor + row * (pillH + pillGap);
+      const selected = (G.gear[slot] || opts[0].id) === opt.id;
+      X.fillStyle = '#303848'; X.fillRect(px, py, pillW, pillH);
+      X.fillStyle = selected ? '#48a830' : '#f0e8d0';
+      X.fillRect(px+2, py+2, pillW-4, pillH-4);
+      X.fillStyle = selected ? '#70d050' : '#fff8e8';
+      X.fillRect(px+2, py+2, pillW-4, 3);
+      T(opt.label, px+pillW/2, py+pillH/2+4, 5, selected ? '#fff' : '#303848', 'center');
+      G.buttons.push({
+        x: px, y: py, w: pillW, h: pillH, label: 'gear-'+slot+'-'+opt.id,
+        action: ()=>{ G.gear[slot] = opt.id; sfx('menu'); }
+      });
+    });
+    yCursor += Math.ceil(opts.length / pillsPerRow) * (pillH + pillGap) + 6;
+  });
+
+  // Back / reset
+  BTN(14, 398, 130, 24, '← BACK', ()=>{ sfx('menu'); G.screen = G.prevScreen || 'menu'; });
+  BTN(160, 398, 150, 24, 'RESET TO DEFAULTS', ()=>{
+    G.gear = {hat:'cap', jacket:'red', pants:'jeans', tool:'backpack'};
+    sfx('menu');
+  });
+  T('Tap a tile to swap.',  324, 412, 5, '#9098a8', 'center');
 }
 function drawBugdex(){
   X.fillStyle='#101820';X.fillRect(0,0,480,432);
@@ -1411,19 +2337,92 @@ function moveLoadout(i,dir){const j=i+dir;if(j<0||j>=G.loadout.length)return;con
 function drawTitle(){
   X.fillStyle='#100820';X.fillRect(0,0,480,432);
   X.fillStyle='#f8f8e8';for(let i=0;i<80;i++){if(Math.sin(G.tick*.05+i*.7)>.5||i%3===0)X.fillRect((i*73+G.tick*.1|0)%480,(i*47)%380,i%5?1:2,i%5?1:2);}
-  ['ambush','firefly','strider','stag','bee'].forEach((id,i)=>drawBug(X,id,56+i*84,200+Math.sin(G.tick*.04+i*1.3)*14,2));
-  X.fillStyle='#f8f8e8';X.fillRect(48,28,384,110);X.fillStyle='#303848';X.fillRect(52,32,376,102);X.fillStyle='#f8f8e8';X.fillRect(56,36,368,94);X.fillStyle='#c02828';X.fillRect(56,36,368,10);
+  ['ambush','firefly','strider','stag','bee'].forEach((id,i)=>drawBug(X,id,56+i*84,195+Math.sin(G.tick*.04+i*1.3)*14,2));
+  // Title box
+  X.fillStyle='#f8f8e8';X.fillRect(48,28,384,110);
+  X.fillStyle='#303848';X.fillRect(52,32,376,102);
+  X.fillStyle='#f8f8e8';X.fillRect(56,36,368,94);
+  X.fillStyle='#c02828';X.fillRect(56,36,368,10);
   X.fillStyle='#303848';X.font=fontReady?'14px PF':'bold 20px monospace';X.textAlign='center';X.textBaseline='alphabetic';X.fillText('KING OF THE BUGS',240,80);
-  X.fillStyle='#c02828';X.fillRect(56,84,368,4);T('Bug Collector RPG',240,110,7,'#607888','center');
-  if(Math.floor(G.tick/28)%2===0)BTN(160,290,160,38,'PRESS START',()=>{G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;});
-  else G.buttons.push({x:160,y:290,w:160,h:38,label:'start_btn',action:()=>{G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;}});
-  T('click or press ENTER',240,362,5,'#404858','center');
+  X.fillStyle='#c02828';X.fillRect(56,84,368,4);
+  T('Bug Collector RPG',240,110,7,'#607888','center');
+
+  // Check if any saves exist
+  const anySlot=[0,1,2].some(n=>getSlotInfo(n)!==null);
+
+  // NEW GAME button
+  BTN(140,268,200,38,'⚡ NEW GAME',()=>{
+    G.currentSlot=null; G.saveName=null;
+    G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;
+  }, !anySlot);
+
+  // CONTINUE — opens slot picker in load mode
+  BTN(140,314,200,38,'▶ CONTINUE',()=>{
+    _saveScreen.mode='load';
+    _saveScreen.confirmDelete=null;
+    G.screen='title_saves';
+  }, anySlot, !anySlot);
+
+  if(!anySlot) T('No save files found',240,366,5,'#505870','center');
+  else         T('3 save slots available',240,366,5,'#608060','center');
+
+  drawSaveToast();
 }
 function drawUnlock(){
   X.fillStyle='#101820';X.fillRect(0,0,480,432);
   for(let i=0;i<32;i++){X.fillStyle=`hsl(${(i*37+G.tick*5)%360},100%,65%)`;X.fillRect(((i*73+G.tick*3)%476)+2,((i*53+G.tick*2)%426)+2,4,4);}
   panel(40,80,400,220,'#f8f8e8');T('NEW ZONE UNLOCKED!',240,118,9,'#c02828','center');X.fillStyle='#c02828';X.fillRect(56,124,368,3);
   G.unlockMsg.split('\n').forEach((l,i)=>T(l,240,156+i*28,7,'#303848','center'));BTN(168,278,144,38,'EXPLORE →',()=>G.screen='world');
+}
+function drawReward(){
+  // Sparkly background
+  X.fillStyle='#0e2030';X.fillRect(0,0,480,432);
+  for(let i=0;i<60;i++){
+    const tt=G.tick*0.4+i*9;
+    const x=((i*73+tt)%480);
+    const y=((i*47+tt*0.7)%432);
+    const hue=(i*30+G.tick*2)%360;
+    X.fillStyle=`hsl(${hue},100%,70%)`;
+    const sz=(i%3)+1;
+    X.fillRect(x|0,y|0,sz,sz);
+  }
+  const rid=G.pendingReward;
+  if(!rid){
+    // Safety: shouldn't happen, but bail back
+    G.screen='world';return;
+  }
+  const b=BUGS[rid];
+  panel(20,50,440,340,'#f8f8e8');
+  T('YOU GOT A BUG!',240,90,9,'#c02828','center');
+  X.fillStyle='#c02828';X.fillRect(60,98,360,3);
+  // Big sprite frame
+  X.fillStyle='#c4d8ec';X.fillRect(150,114,180,140);
+  X.strokeStyle='#303848';X.lineWidth=3;X.strokeRect(150,114,180,140);
+  drawBug(X,rid,240,188,4.0);
+  // Bug name
+  T(b.name,240,278,10,'#303848','center');
+  // Type badge centered
+  drawTypeBadge(218,288,b.type);
+  // Stats line
+  const tr=G.battle&&G.battle.trainer;
+  const lvl=tr?Math.max(1,(tr.team.find(t=>t.id===rid)||{lvl:1}).lvl):5;
+  const ns=levelStats(rid,lvl);
+  T('Lv. '+lvl+'   HP '+ns.hp+'   ATK '+ns.atk+'   DEF '+ns.def+'   SPD '+ns.spd, 240, 322, 5, '#506070', 'center');
+  if(tr){
+    T('Gifted by '+tr.name+'.', 240, 340, 5, '#506070', 'center');
+  }
+  T('Added to your loadout.', 240, 356, 5, '#506070', 'center');
+  BTN(160,370,160,30,'✓  NICE!',()=>{
+    sfx('catch');
+    const inst=newCaughtInstance(rid,lvl);
+    G.loadout.push(inst);
+    G.seen.add(rid);
+    if(G.battle&&G.battle.trainer) G.battle.trainer.npc.defeated=true;
+    G.pendingReward=null;
+    saveBattleHP();
+    G.screen='world';
+    checkUnlocks();
+  });
 }
 
 // ═══════════════════════════════════════════════
@@ -1432,7 +2431,11 @@ function drawUnlock(){
 function loop(){
   G.tick++;G.buttons=[];
   switch(G.screen){
-    case 'title':   drawTitle();  break;
+    case 'title':       drawTitle();        break;
+    case 'title_saves': drawSaveScreen();   break;
+    case 'name_save':   drawNameSave();     break;
+    case 'boatman_trade': drawBoatmanTrade(); break;
+    case 'item_reward': drawItemReward();   break;
     case 'intro':   drawIntro();  break;
     case 'world':   drawWorld();  break;
     case 'battle':  drawBattle(); break;
@@ -1441,6 +2444,8 @@ function loop(){
     case 'bugdex':  drawBugdex(); break;
     case 'loadout': drawLoadout();break;
     case 'unlock':  drawUnlock(); break;
+    case 'reward':  drawReward(); break;
+    case 'gear':    drawGear();   break;
   }
   requestAnimationFrame(loop);
 }
@@ -1452,12 +2457,35 @@ loop();
 document.addEventListener('keydown',e=>{
   G.keys[e.key]=true;
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
-  if(e.key==='Enter'&&G.screen==='title'){G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;}
+  if(e.key==='Enter'&&G.screen==='title'){
+    // Enter on title starts new game if no saves, else goes to load screen
+    if([0,1,2].some(n=>getSlotInfo(n))){_saveScreen.mode='load';G.screen='title_saves';}
+    else{G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;}
+  }
+  if(G.screen==='name_save'){
+    if(e.key==='Backspace'){_nameInput.str=_nameInput.str.slice(0,-1);}
+    else if(e.key==='Enter'){
+      const name=_nameInput.str.trim()||'Trainer';
+      G.saveName=name; saveToSlot(_nameInput.slot); G.screen='world';
+    } else if(e.key.length===1&&_nameInput.str.length<14) _nameInput.str+=e.key;
+  }
   if(e.key==='Enter'&&G.screen==='world')G.screen='menu';
   if(e.key==='Enter'&&G.screen==='intro')advanceIntro();
   // B = back in battle move screen
   if((e.key==='b'||e.key==='B')&&G.screen==='battle'&&G.battlePhase==='move'){G.battlePhase='action';}
   if((e.key==='b'||e.key==='B')&&G.screen==='battle'&&G.swapMode){G.swapMode=false;}
+  if((e.key==='z'||e.key==='Z')&&G.screen==='battle'){
+    if(G.battlePhase==='result'){afterResult();return;}
+    if(G.battlePhase==='over'){endBattle();return;}
+    if(G.battlePhase==='trainer-show'){G.battlePhase='trainer-out';G.trainerAnimT=0;return;}
+    if(G.battlePhase==='trainer-defeat'){
+      if(G.pendingReward){G.screen='reward';return;}
+      if(G.battle && G.battle.trainer) G.battle.trainer.npc.defeated = true;
+      G.battlePhase = 'over';
+      G.battleMsg = (G.battle && G.battle.trainer ? G.battle.trainer.name : 'Trainer') + ' was defeated!';
+      return;
+    }
+  }
   if((e.key==='z'||e.key==='Z')&&G.screen==='world'){
     // Z = interact
     const p=G.player,tx=Math.round(p.x/TW),ty=Math.round(p.y/TW);
@@ -1466,6 +2494,15 @@ document.addEventListener('keydown',e=>{
     if(ftile===11)enterPC();
     if(ftile===12)exitPC();
     if(ftile===13)tryTalkDesk();
+    const npc=getNPCAt(G.zone,tx+ddx,ty+ddy);
+    // Also check boat tiles adjacent
+    const boatNpc=NPCS.find(n=>n.zone===G.zone&&n.isTrader&&
+      Math.abs(n.tx-(tx+ddx))<=1&&Math.abs(n.ty-(ty+ddy))<=1);
+    if(boatNpc){talkToBoatman(boatNpc);return;}
+    if(npc&&!npc.defeated&&!npc.isTrader)triggerTrainerBattle(npc);
+    else if(npc&&npc.defeated&&!npc.isTrader){
+      G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight!'}`;G.pcMsgTimer=160;
+    }
   }
   if(G.screen==='naming'){
     if(e.key==='Backspace')G.nameStr=G.nameStr.slice(0,-1);
@@ -1537,6 +2574,21 @@ function setupBtn(id,fn){
 }
 setupBtn('btn-a',()=>{
   if(G.screen==='intro'){advanceIntro();return;}
+  if(G.screen==='battle'){
+    if(G.battlePhase==='result'){afterResult();return;}
+    if(G.battlePhase==='over'){endBattle();return;}
+    if(G.battlePhase==='trainer-show'){G.battlePhase='trainer-out';G.trainerAnimT=0;return;}
+    if(G.battlePhase==='trainer-defeat'){
+      if(G.pendingReward){G.screen='reward';return;}
+      if(G.battle && G.battle.trainer) G.battle.trainer.npc.defeated = true;
+      G.battlePhase = 'over';
+      G.battleMsg = (G.battle && G.battle.trainer ? G.battle.trainer.name : 'Trainer') + ' was defeated!';
+      return;
+    }
+    if(G.battlePhase==='action'){/* default to FIGHT */G.battlePhase='move';return;}
+  }
+  if(G.screen==='unlock'){G.screen='world';return;}
+  if(G.screen==='item_reward'){G.screen='world';G.pendingItemReward=null;return;}
   if(G.screen==='world'){
     const p=G.player,tx=Math.round(p.x/TW),ty=Math.round(p.y/TW);
     const dirs=[[0,-1],[1,0],[0,1],[-1,0]];const[ddx,ddy]=dirs[p.dir]||[0,1];
@@ -1544,6 +2596,15 @@ setupBtn('btn-a',()=>{
     if(ftile===11){enterPC();return;}
     if(ftile===12){exitPC();return;}
     if(ftile===13){tryTalkDesk();return;}
+    // Boatman check
+    const boatNpc=NPCS.find(n=>n.zone===G.zone&&n.isTrader&&
+      Math.abs(n.tx-(tx+ddx))<=1&&Math.abs(n.ty-(ty+ddy))<=1);
+    if(boatNpc){talkToBoatman(boatNpc);return;}
+    const npc=getNPCAt(G.zone,tx+ddx,ty+ddy);
+    if(npc&&!npc.defeated&&!npc.isTrader){triggerTrainerBattle(npc);return;}
+    else if(npc&&npc.defeated&&!npc.isTrader){
+      G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight!'}`;G.pcMsgTimer=160;return;
+    }
   }
 });
 setupBtn('btn-b',()=>{
@@ -1559,6 +2620,1524 @@ setupBtn('btn-menu',()=>{
 setupBtn('btn-start',()=>{
   if(G.screen==='title'){G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;}
 });
+</script>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!-- EXPANSION: Audio · NPCs · UI overrides · Sprites -->
+<!-- ═══════════════════════════════════════════════ -->
+<script>
+// ═══════════════════════════════════════════════
+// AUDIO — WebAudio chiptune
+// ═══════════════════════════════════════════════
+const AUDIO = {
+  ctx: null,
+  masterGain: null,
+  musicGain: null,
+  sfxGain: null,
+  muted: false,
+  currentTrack: null,
+  trackTimers: [],
+};
+function ensureAudio(){
+  if(AUDIO.ctx) return AUDIO.ctx;
+  try {
+    const C = window.AudioContext || window.webkitAudioContext;
+    AUDIO.ctx = new C();
+    AUDIO.masterGain = AUDIO.ctx.createGain();
+    AUDIO.masterGain.gain.value = AUDIO.muted ? 0 : 0.6;
+    AUDIO.masterGain.connect(AUDIO.ctx.destination);
+    AUDIO.musicGain = AUDIO.ctx.createGain();
+    AUDIO.musicGain.gain.value = 0.22;
+    AUDIO.musicGain.connect(AUDIO.masterGain);
+    AUDIO.sfxGain = AUDIO.ctx.createGain();
+    AUDIO.sfxGain.gain.value = 0.5;
+    AUDIO.sfxGain.connect(AUDIO.masterGain);
+  } catch(e){}
+  return AUDIO.ctx;
+}
+// Resume on first user gesture
+['click','keydown','touchstart'].forEach(ev =>
+  window.addEventListener(ev, () => {
+    ensureAudio();
+    if(AUDIO.ctx && AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
+    // start title music on first interaction if title screen
+    if(!AUDIO.currentTrack) startMusicForScreen();
+  }, {once:false, passive:true})
+);
+function tone(freq, dur, type, gainAmt, when){
+  const ctx = AUDIO.ctx; if(!ctx) return;
+  when = when || ctx.currentTime;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(freq, when);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(gainAmt||0.3, when + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+  o.connect(g); g.connect(AUDIO.sfxGain);
+  o.start(when); o.stop(when + dur + 0.02);
+}
+function noise(dur, gainAmt, when){
+  const ctx = AUDIO.ctx; if(!ctx) return;
+  when = when || ctx.currentTime;
+  const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i] = (Math.random()*2-1) * (1 - i/len);
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const g = ctx.createGain(); g.gain.value = gainAmt || 0.25;
+  src.connect(g); g.connect(AUDIO.sfxGain);
+  src.start(when); src.stop(when + dur);
+}
+function sfx(name){
+  ensureAudio(); const ctx = AUDIO.ctx; if(!ctx) return;
+  const t = ctx.currentTime;
+  switch(name){
+    case 'menu':   tone(680, 0.05, 'square', 0.15, t); break;
+    case 'select': tone(880, 0.07, 'square', 0.18, t); tone(1320, 0.07, 'square', 0.15, t+0.04); break;
+    case 'hit':    noise(0.08, 0.3, t); tone(160, 0.08, 'sawtooth', 0.18, t); break;
+    case 'crit':   tone(880, 0.06, 'square', 0.2, t); tone(440, 0.1, 'sawtooth', 0.22, t+0.04); noise(0.1, 0.3, t); break;
+    case 'miss':   tone(220, 0.1, 'triangle', 0.18, t); tone(180, 0.08, 'triangle', 0.14, t+0.06); break;
+    case 'faint':  tone(440, 0.15, 'sawtooth', 0.22, t); tone(330, 0.18, 'sawtooth', 0.2, t+0.12); tone(220, 0.25, 'sawtooth', 0.18, t+0.28); break;
+    case 'buff':   tone(440, 0.05, 'triangle', 0.2, t); tone(660, 0.06, 'triangle', 0.2, t+0.05); tone(880, 0.07, 'triangle', 0.2, t+0.1); break;
+    case 'catch':  for(let i=0;i<5;i++) tone(523 + i*100, 0.08, 'square', 0.18, t+i*0.07); tone(1046, 0.2, 'square', 0.22, t+0.4); break;
+    case 'catchfail': tone(330, 0.1, 'square', 0.2, t); tone(220, 0.15, 'square', 0.18, t+0.1); break;
+    case 'levelup': for(let i=0;i<4;i++) tone(523+i*131, 0.1, 'square', 0.22, t+i*0.08); tone(1046, 0.3, 'triangle', 0.22, t+0.4); break;
+    case 'heal':   tone(523, 0.1, 'triangle', 0.22, t); tone(659, 0.1, 'triangle', 0.22, t+0.1); tone(784, 0.15, 'triangle', 0.22, t+0.22); break;
+    case 'encounter': for(let i=0;i<4;i++){ tone(220+i*60, 0.06, 'sawtooth', 0.22, t+i*0.06); } tone(440, 0.3, 'square', 0.2, t+0.3); break;
+    case 'win':    for(let i=0;i<6;i++) tone([523,659,784,1046,784,1046][i], 0.13, 'square', 0.22, t+i*0.1); break;
+    case 'portal': tone(440, 0.08, 'triangle', 0.2, t); tone(660, 0.08, 'triangle', 0.2, t+0.06); tone(880, 0.1, 'triangle', 0.22, t+0.13); break;
+  }
+}
+
+// ── MUSIC ──
+// Tracks: title, world1, world2, world3, lab, battle
+const MUSIC = {
+  title: {
+    bpm: 100, wave: 'square', vol: 0.13,
+    // E5 D5 C5 D5 / E5 E5 E5 - / D5 D5 D5 - / E5 G5 G5 -
+    melody: [659,587,523,587, 659,659,659,0, 587,587,587,0, 659,784,784,0],
+    bass:   [261,261,196,196, 261,261,261,0, 220,220,220,0, 261,196,196,0]
+  },
+  world1: {
+    bpm: 130, wave: 'square', vol: 0.10,
+    melody: [523,659,523,440, 523,659,784,659, 587,523,440,392, 440,523,659,587],
+    bass:   [131,131,196,196, 131,131,165,165, 147,147,196,196, 147,131,131,131]
+  },
+  world2: {
+    bpm: 110, wave: 'triangle', vol: 0.11,
+    melody: [440,494,523,587, 523,494,440,392, 440,494,523,659, 587,523,494,440],
+    bass:   [110,110,131,131, 131,131,110,110, 110,110,131,131, 147,131,131,110]
+  },
+  world3: {
+    bpm: 90, wave: 'triangle', vol: 0.11,
+    melody: [392,415,440,415, 392,349,329,349, 392,440,494,440, 392,349,329,294],
+    bass:   [98,98,110,110, 98,98,82,82, 98,110,123,123, 98,82,82,73]
+  },
+  lab: {
+    bpm: 80, wave: 'triangle', vol: 0.10,
+    melody: [523,659,784,659, 523,587,523,440, 523,659,784,1046, 880,784,659,523],
+    bass:   [131,165,196,165, 131,147,131,110, 131,165,196,261, 220,196,165,131]
+  },
+  battle: {
+    bpm: 150, wave: 'square', vol: 0.12,
+    melody: [659,659,784,659, 587,659,523,440, 659,659,784,880, 1046,784,659,587],
+    bass:   [165,165,196,165, 147,165,131,110, 165,165,196,220, 261,196,165,147]
+  }
+};
+function stopMusic(){
+  AUDIO.trackTimers.forEach(t => clearTimeout(t));
+  AUDIO.trackTimers = [];
+  AUDIO.currentTrack = null;
+}
+function startMusic(trackName){
+  // Music disabled — SFX only
+  return;
+}
+function musicTone(freq, dur, type, gainAmt, when){
+  const ctx = AUDIO.ctx; if(!ctx) return;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(freq, when);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(gainAmt, when + 0.01);
+  g.gain.linearRampToValueAtTime(gainAmt*0.7, when + dur*0.5);
+  g.gain.exponentialRampToValueAtTime(0.0005, when + dur);
+  o.connect(g); g.connect(AUDIO.musicGain);
+  o.start(when); o.stop(when + dur + 0.02);
+}
+function startMusicForScreen(){
+  const s = G.screen;
+  let track = 'title';
+  if(s === 'title') track = 'title';
+  else if(s === 'battle') track = 'battle';
+  else if(s === 'world'){
+    if(G.zone === 'pc') track = 'lab';
+    else if(G.zone === 1) track = 'world1';
+    else if(G.zone === 2) track = 'world2';
+    else if(G.zone === 3) track = 'world3';
+  }
+  else if(s === 'intro') track = 'lab';
+  else if(s === 'naming' || s === 'unlock') track = 'lab';
+  else if(s === 'menu' || s === 'bugdex' || s === 'loadout') track = AUDIO.currentTrack || 'world1';
+  startMusic(track);
+}
+// Music disabled — no interval needed
+// (kept the function stubs above so any callers no-op gracefully)
+
+// ═══════════════════════════════════════════════
+// NPC TRAINERS
+// ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════
+// BOATMAN TRADE
+// ═══════════════════════════════════════════════
+function countCaught(id){
+  // Count how many instances of this bug id are in loadout
+  return G.loadout.filter(inst=>inst.id===id).length;
+}
+
+function talkToBoatman(npc){
+  if(G.boatmanTraded||npc.defeated){
+    G.pcMsg=`Boatman Clyde:\n${npc.afterMsg||'Thanks again, pal!'}`;
+    G.pcMsgTimer=160;return;
+  }
+  G.screen='boatman_trade';
+}
+
+function drawBoatmanTrade(){
+  // Dark water bg
+  X.fillStyle='#0a1828';X.fillRect(0,0,480,432);
+  // Boat in background
+  X.fillStyle='#1848a8';X.fillRect(0,200,480,232);
+  X.fillStyle='rgba(80,160,255,0.2)';X.fillRect(0,210,480,2);X.fillRect(0,220,480,2);
+  // The boat
+  X.fillStyle='#7a4818';X.fillRect(160,180,160,40);
+  X.fillStyle='#9a6030';X.fillRect(162,178,156,4);
+  X.fillStyle='#5a3008';X.fillRect(162,218,156,4);
+  // Draw boatman NPC sprite
+  drawNPCSprite(X,240,178,'angler',2,false);
+
+  panel(40,14,400,34,'#f8f8e8');
+  T('BOATMAN CLYDE',240,34,8,'#303848','center');
+
+  const waterBugCount=countCaught('waterbug');
+  const hasRake=G.inventory.lakeRake;
+
+  if(hasRake){
+    panel(40,58,400,60,'#f8f8e8');
+    T("Ha! You already got the rake.",60,80,7,'#303848');
+    T("Good fishin' to ya.",60,96,7,'#607080');
+  } else {
+    panel(40,58,400,100,'#f8f8e8');
+    T('"My wife LOVES Giant Water Bugs.',60,80,6,'#303848');
+    T('Trade me 3 and I\'ll give you',60,96,6,'#303848');
+    T('my Lake Weed Rake."',60,112,6,'#303848');
+    T(`You have: ${waterBugCount} Giant Water Bug${waterBugCount!==1?'s':''}`,60,130,6,'#607080');
+  }
+
+  // Show loadout bugs as mini sprites so player can see what they have
+  panel(40,168,400,80,'#f0ece0');
+  T('Your bugs:',52,186,5,'#607080');
+  G.loadout.slice(0,8).forEach((inst,i)=>{
+    drawBug(X,inst.id,60+i*48,224,1.2);
+    if(inst.id==='waterbug'){
+      X.fillStyle='rgba(200,60,60,0.5)';X.fillRect(44+i*48,210,32,20);
+    }
+  });
+
+  if(!hasRake){
+    if(waterBugCount>=3){
+      BTN(80,262,140,36,'TRADE (3 🪲→Rake)',()=>{
+        doBoatmanTrade();
+      },true);
+    } else {
+      BTN(80,262,140,36,'NEED 3 BUGS',null,false,true);
+      T('(catch more Giant Water Bugs)',200,282,5,'#808898');
+    }
+  }
+  BTN(300,262,120,36,'← LEAVE',()=>G.screen='world');
+}
+
+function doBoatmanTrade(){
+  // Remove 3 waterbug instances from loadout
+  let removed=0;
+  G.loadout=G.loadout.filter(inst=>{
+    if(inst.id==='waterbug'&&removed<3){removed++;return false;}
+    return true;
+  });
+  G.inventory.lakeRake=true;
+  G.boatmanTraded=true;
+  NPCS.find(n=>n.isTrader).defeated=true;
+  sfx('win');
+  G.pendingItemReward={
+    name:'LAKE WEED RAKE',
+    desc:'A sturdy wooden rake for\ndragging through pond weeds.\nUse it in water to find\nhidden items and bugs!',
+    sprite:'rake',
+  };
+  G.screen='item_reward';
+}
+
+// ═══════════════════════════════════════════════
+// ITEM REWARD SCREEN
+// ═══════════════════════════════════════════════
+function drawItemReward(){
+  const r=G.pendingItemReward;
+  if(!r){G.screen='world';return;}
+  X.fillStyle='#080818';X.fillRect(0,0,480,432);
+  // Sparkles
+  for(let i=0;i<40;i++){
+    const tt=G.tick*0.5+i*11;
+    X.fillStyle=`hsl(${(i*20+G.tick*3)%360},100%,70%)`;
+    X.fillRect((i*83+tt|0)%480,(i*53+tt*0.6|0)%432,3,3);
+  }
+  panel(60,60,360,300,'#f8f8e8');
+  T('ITEM ACQUIRED!',240,90,9,'#c02828','center');
+  X.fillStyle='#c02828';X.fillRect(76,96,328,3);
+
+  // Draw rake sprite
+  drawRakeSprite(X,240,190,3);
+
+  T(r.name,240,240,8,'#303848','center');
+  r.desc.split('\n').forEach((l,i)=>T(l,240,264+i*18,6,'#607080','center'));
+
+  if(Math.floor(G.tick/22)%2===0)
+    BTN(180,330,120,28,'AWESOME! →',()=>{G.screen='world';G.pendingItemReward=null;});
+  else
+    G.buttons.push({x:180,y:330,w:120,h:28,label:'item_ok',action:()=>{G.screen='world';G.pendingItemReward=null;}});
+  T('press A to continue',240,370,5,'#909898','center');
+}
+
+function drawRakeSprite(ctx,cx,cy,s){
+  // Handle
+  ctx.fillStyle='#8a5828';ctx.fillRect(cx-2*s,cy-20*s,4*s,34*s);
+  ctx.fillStyle='#a06830';ctx.fillRect(cx-1*s,cy-20*s,2*s,32*s);
+  // Rake head
+  ctx.fillStyle='#606860';ctx.fillRect(cx-12*s,cy+12*s,24*s,4*s);
+  // Tines
+  ctx.fillStyle='#504840';
+  [-10,-6,-2,2,6,10].forEach(tx2=>{
+    ctx.fillRect(cx+(tx2-1)*s,cy+14*s,2*s,8*s);
+  });
+  ctx.fillStyle='#808880';ctx.fillRect(cx-11*s,cy+12*s,22*s,2*s);
+}
+
+// ═══════════════════════════════════════════════
+// RAKE ACTION — used in water tiles in zone 2
+// ═══════════════════════════════════════════════
+const RAKE_RESULTS=['lakeweed','shinyrock','mosquito_battle','scrap','nothing'];
+// weights: lakeweed=3,shinyrock=2,mosquito=2,scrap=2,nothing=1 (out of 10)
+const RAKE_WEIGHTS=[3,2,2,2,1];
+
+function doRakeAction(){
+  if(!G.inventory.lakeRake) return;
+  if(G.zone!==2) return;
+  const p=G.player;
+  const tx=Math.round(p.x/TW),ty=Math.round(p.y/TW);
+  const key=`${tx},${ty}`;
+  const tile=gt(2,tx,ty);
+  if(tile!==7){G.pcMsg='Not in water!';G.pcMsgTimer=60;return;}
+  if(G.rake.rakedTiles[key]){G.pcMsg='Already raked here.';G.pcMsgTimer=80;return;}
+
+  // Mark as raked
+  G.rake.rakedTiles[key]=true;
+
+  // Trigger rake animation
+  G.rake.anim=40;
+
+  // Pick a result (weighted random)
+  const roll=Math.random()*10;
+  let acc=0,result='nothing';
+  RAKE_RESULTS.forEach((r,i)=>{acc+=RAKE_WEIGHTS[i];if(roll<acc&&result==='nothing')result=r;});
+
+  setTimeout(()=>{
+    if(result==='lakeweed'){
+      G.inventory.lakeWeed=(G.inventory.lakeWeed||0)+1;
+      G.pcMsg=`You raked up\nsome Lake Weed!\n(Have: ${G.inventory.lakeWeed})`;
+      G.pcMsgTimer=180;sfx&&sfx('buff');
+    } else if(result==='shinyrock'){
+      G.inventory.shinyRock=(G.inventory.shinyRock||0)+1;
+      G.pcMsg=`Ooh! A shiny rock!\n(Have: ${G.inventory.shinyRock})`;
+      G.pcMsgTimer=180;sfx&&sfx('buff');
+    } else if(result==='mosquito_battle'){
+      G.pcMsg='Something wriggled\nout of the weeds!';G.pcMsgTimer=60;
+      setTimeout(()=>{
+        const zl=zoneLevel(2);
+        const lvl=zl.min+Math.floor(Math.random()*(zl.max-zl.min+1));
+        G.battle={wild:makeBug('mosquito',{isWild:true,level:lvl}),trainer:null};
+        G.battleParty=buildBattleParty();
+        if(G.battleParty.length){
+          G.battleMsg=`A Lv.${lvl} MOSQUITO LARVA\nwriggled out!`;
+          G.battlePhase='action';G.pendingAction=null;
+          G.btFlashP=0;G.btFlashE=0;G.btTick=0;G.swapMode=false;
+          G.screen='battle';sfx&&sfx('encounter');
+        }
+      },900);
+    } else if(result==='scrap'){
+      G.inventory.scrapMetal=(G.inventory.scrapMetal||0)+1;
+      G.pcMsg=`Found some scrap metal.\nMaybe useful?\n(Have: ${G.inventory.scrapMetal})`;
+      G.pcMsgTimer=180;sfx&&sfx('buff');
+    } else {
+      G.pcMsg='Nothing in this spot.';G.pcMsgTimer=100;
+    }
+  },600);
+}
+
+// Reset raked tiles when entering zone 2
+function onEnterZone(z){
+  if(z===2){
+    G.rake.rakedTiles={};
+    G.rake.lastZone=2;
+  }
+}
+
+const NPCS = [
+  // ── Zone 1 ──
+  {zone:1, tx:7, ty:18, dir:2, sprite:'kid',  name:'BUG KID PIP',
+    intro:"My team's all bugs\nfrom around here.\nPlus my best mate!",
+    afterMsg:"Take care of my best mate!",
+    team:[{id:'bee',lvl:3},{id:'stag',lvl:4},{id:'stinkbug',lvl:5}],
+    rewardId:'stinkbug', defeated:false},
+  {zone:1, tx:22, ty:20, dir:2, sprite:'hiker', name:'HIKER MARGO',
+    intro:"I dig up the weirdest\nthings on my hikes.\nWant to see?",
+    afterMsg:"Take her — she's yours.",
+    team:[{id:'stag',lvl:4},{id:'ambush',lvl:5},{id:'worm',lvl:5}],
+    rewardId:'worm', defeated:false},
+  // ── Zone 2 — Boatman (non-combat trade NPC) ──
+  {zone:2, tx:15, ty:12, dir:2, sprite:'angler', name:'BOATMAN CLYDE',
+    isTrader:true, // flag: no battle, just dialog
+    intro:"My wife's obsessed with\nGiant Water Bugs. Don't\nask me why...",
+    afterMsg:"Thanks pal. Rake's all yours.",
+    defeated:false}, // 'defeated' here means traded
+    intro:"My pond, my rules.\nMeet my crew.",
+    afterMsg:"Fair beat. Boatman's yours.",
+    team:[{id:'backswim',lvl:5},{id:'waterbug',lvl:6},{id:'boatman',lvl:7}],
+    rewardId:'boatman', defeated:false},
+  {zone:2, tx:22, ty:6, dir:2, sprite:'scout', name:'SCOUT TOMI',
+    intro:"Trained these by the bog.\nReady?",
+    afterMsg:"Diving Beetle's yours.\nTreat 'em well.",
+    team:[{id:'larva',lvl:6},{id:'waterbug',lvl:6},{id:'diver',lvl:7}],
+    rewardId:'diver', defeated:false},
+  // ── Zone 3 ──
+  {zone:3, tx:5, ty:12, dir:1, sprite:'hiker', name:'MYCOLOGIST IRIS',
+    intro:"Spores, wings, and wonder.\nLet's see yours.",
+    afterMsg:"Mayfly — fragile, but fast.",
+    team:[{id:'shroomfly',lvl:8},{id:'carrion',lvl:9},{id:'mayfly',lvl:10}],
+    rewardId:'mayfly', defeated:false},
+  {zone:3, tx:14, ty:18, dir:0, sprite:'rival', name:'RIVAL JESSE',
+    intro:"Heard you woke up!\nLet's see what 10 years\nin a coma cost you.",
+    afterMsg:"...you got better.\nHere — take the pillbug.",
+    team:[{id:'fungus',lvl:9},{id:'carrion',lvl:10},{id:'pillbug',lvl:11}],
+    rewardId:'pillbug', defeated:false},
+];
+function getNPCAt(zone, tx, ty){
+  return NPCS.find(n => n.zone===zone && n.tx===tx && n.ty===ty);
+}
+function checkNPCLineOfSight(){
+  if(G.screen !== 'world') return false;
+  const p = G.player;
+  const ptx = Math.round(p.x/TW), pty = Math.round(p.y/TW);
+  const SIGHT = 3;
+  for(const n of NPCS){
+    if(n.zone !== G.zone || n.defeated) continue;
+    const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
+    const [dx,dy] = dirs[n.dir||2];
+    for(let i=1;i<=SIGHT;i++){
+      const tx = n.tx + dx*i, ty = n.ty + dy*i;
+      const tile = gt(G.zone, tx, ty);
+      // sight blocked by walls/water/etc — but walkable encounter tiles are OK
+      if(tile===2 || tile===5 || tile===3) break;
+      if(tx === ptx && ty === pty){
+        triggerTrainerBattle(n);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function triggerTrainerBattle(npc){
+  if(npc.defeated) return;
+  const lead = npc.team[0];
+  G.battle = {
+    wild: makeBug(lead.id, {isWild:true, level:lead.lvl}),
+    trainer: {name:npc.name, team:npc.team, idx:0, npc:npc, rewardId:npc.rewardId}
+  };
+  G.battleParty = buildBattleParty();
+  if(!G.battleParty.length){G.battle=null;return;}
+  G.battleMsg = `${npc.name}:\n${npc.intro}`;
+  G.battlePhase = 'trainer-show';
+  G.trainerAnimT = 0;
+  G.btFlashP = 0; G.btFlashE = 0; G.btTick = 0; G.swapMode = false;
+  G.screen = 'battle';
+  sfx('encounter');
+}
+
+// ── Render NPCs in world ──
+function drawNPCs(ctx, camX, camY){
+  NPCS.filter(n => n.zone === G.zone).forEach(n => {
+    const sx = n.tx*TW + TW/2 - camX;
+    const sy = n.ty*TW + TW - camY;
+    if(sx < -32 || sx > 512 || sy < -32 || sy > 464) return;
+    // Sight cone — show 3 dots in NPC's gaze direction (only if not defeated)
+    if(!n.defeated){
+      const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
+      const [dx,dy] = dirs[n.dir||2];
+      const pulse = Math.sin(G.tick*0.12) * 0.4 + 0.6;
+      for(let i=1;i<=3;i++){
+        const tx = n.tx + dx*i, ty = n.ty + dy*i;
+        const tile = gt(G.zone, tx, ty);
+        if(tile===2 || tile===5 || tile===3) break;
+        const dotX = tx*TW + TW/2 - camX;
+        const dotY = ty*TW + TW/2 - camY;
+        ctx.fillStyle = `rgba(255, 80, 40, ${0.18 * pulse * (4-i)/3})`;
+        ctx.fillRect(dotX-5, dotY-5, 10, 10);
+        ctx.fillStyle = `rgba(255, 80, 40, ${0.4 * pulse})`;
+        ctx.fillRect(dotX-2, dotY-2, 4, 4);
+      }
+    }
+    drawNPCSprite(ctx, sx, sy, n.sprite, n.dir||2, n.defeated);
+    // Exclamation/eye marker if not defeated
+    if(!n.defeated){
+      const bob = Math.sin(G.tick*0.08 + n.tx)*1.5;
+      ctx.fillStyle='#f8e030';
+      ctx.fillRect(sx-2, sy-28+bob, 4, 8);
+      ctx.fillRect(sx-2, sy-18+bob, 4, 3);
+      ctx.fillStyle='#303848';
+      ctx.fillRect(sx-1, sy-27+bob, 2, 6);
+      ctx.fillRect(sx-1, sy-17+bob, 2, 2);
+    }
+  });
+}
+function drawNPCSprite(ctx, x, y, sprite, dir, dim){
+  ctx.save();
+  if(dim) ctx.globalAlpha = 0.7;
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fillRect(x-6,y+8,12,3);
+  let pants='#2a4060', shirt='#3070b0', hair='#1a1010', hat=null;
+  if(sprite==='kid'){pants='#3a5828'; shirt='#80b840'; hair='#7a4818'; hat=null;}
+  else if(sprite==='hiker'){pants='#605040'; shirt='#a05828'; hair='#3a2010'; hat='#a05828';}
+  else if(sprite==='angler'){pants='#286050'; shirt='#5090a0'; hair='#1a1010'; hat='#503028';}
+  else if(sprite==='scout'){pants='#604010'; shirt='#c0a040'; hair='#a06030'; hat='#604010';}
+  else if(sprite==='rival'){pants='#202020'; shirt='#4040a0'; hair='#3a1810'; hat=null;}
+  // Legs
+  ctx.fillStyle=pants;
+  ctx.fillRect(x-4,y+2,4,9); ctx.fillRect(x,y+2,4,9);
+  ctx.fillStyle='#111';
+  ctx.fillRect(x-5,y+10,5,3); ctx.fillRect(x+1,y+10,4,3);
+  // Body / shirt
+  ctx.fillStyle=shirt; ctx.fillRect(x-6,y-12,12,14);
+  ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fillRect(x-6,y-12,12,2);
+  // Arms
+  ctx.fillStyle=shirt;
+  ctx.fillRect(x+5,y-10,4,8); ctx.fillRect(x-8,y-10,4,8);
+  ctx.fillStyle='#f8c88a';
+  ctx.fillRect(x+5,y-3,4,3); ctx.fillRect(x-8,y-3,4,3);
+  // Head
+  ctx.fillStyle='#f8c88a'; ctx.fillRect(x-5,y-21,10,9);
+  ctx.fillStyle='#e8b87a'; ctx.fillRect(x-6,y-19,2,5); ctx.fillRect(x+4,y-19,2,5);
+  // Eyes facing dir
+  ctx.fillStyle='#1a1010';
+  if(dir===2){ ctx.fillRect(x-3,y-17,2,2); ctx.fillRect(x+1,y-17,2,2); }
+  else if(dir===3){ ctx.fillRect(x-4,y-17,2,2); }
+  else if(dir===1){ ctx.fillRect(x+2,y-17,2,2); }
+  // Hair
+  ctx.fillStyle=hair;
+  ctx.fillRect(x-5,y-23,10,6);
+  ctx.fillRect(x-6,y-21,2,5); ctx.fillRect(x+4,y-21,2,5);
+  // Hat (if any)
+  if(hat){
+    ctx.fillStyle=hat;
+    ctx.fillRect(x-6,y-25,12,5);
+    ctx.fillRect(x-7,y-24,14,3); // brim
+    ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.fillRect(x-3,y-25,5,2);
+  }
+  // Rival has spiky hair
+  if(sprite==='rival'){
+    ctx.fillStyle=hair;
+    ctx.fillRect(x-6,y-26,3,4); ctx.fillRect(x-1,y-27,3,5); ctx.fillRect(x+3,y-26,3,4);
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════
+// BUGDEX + LOADOUT OVERRIDE — show level + XP + type
+// ═══════════════════════════════════════════════
+function drawBugdex(){
+  X.fillStyle='#101820';X.fillRect(0,0,480,432);
+  panel(0,0,480,36,'#f8f8e8');T('BUGDEX',240,24,9,'#303848','center');
+  const total = Object.keys(BUGS).length;
+  const caughtCount = G.seen.size;
+  T('Discovered ' + caughtCount + ' / ' + total, 240, 34, 5, '#607080', 'center');
+  const ids=Object.keys(BUGS),ih=66,visY=40,visH=370;
+  G.bugdexScroll=Math.max(0,Math.min(G.bugdexScroll,Math.max(0,(ids.length-Math.floor(visH/ih))*ih)));
+  X.save();X.beginPath();X.rect(0,visY,480,visH);X.clip();
+  ids.forEach((id,i)=>{
+    const known = G.seen.has(id);
+    const ey = visY + i*ih - G.bugdexScroll;
+    if(ey < visY-ih || ey > visY+visH) return;
+    X.fillStyle = known ? '#e8e0d0' : '#282830';
+    X.fillRect(4, ey+2, 472, ih-4);
+    X.strokeStyle = '#505868'; X.lineWidth = 2;
+    X.strokeRect(4, ey+2, 472, ih-4);
+    if(known){
+      X.fillStyle='#c4d8ec'; X.fillRect(6, ey+4, 56, ih-8);
+      drawBug(X, id, 34, ey+ih/2, 1.3);
+      const b = BUGS[id];
+      const owned = G.loadout.filter(inst => inst.id === id).length;
+      T(b.name, 72, ey+18, 7, '#303848');
+      drawTypeBadge(72, ey+22, b.type);
+      T('Base  HP:'+b.hp+'  ATK:'+b.atk+'  DEF:'+b.def+'  SPD:'+b.spd, 122, ey+40, 5, '#506070');
+      T(b.moves.slice(0,4).join(' · '), 72, ey+56, 4, '#708090');
+      // Owned count badge
+      if(owned > 0){
+        X.fillStyle = '#2a6020';
+        X.fillRect(396, ey+8, 72, 22);
+        X.fillStyle = '#3a8020';
+        X.fillRect(397, ey+9, 70, 6);
+        T('×' + owned + ' OWNED', 432, ey+22, 5, '#f0f8e8', 'center');
+      }
+    } else {
+      X.fillStyle = '#505868'; X.fillRect(6, ey+4, 56, ih-8);
+      T('???', 72, ey+30, 8, '#708090');
+      T('Not yet caught', 72, ey+50, 5, '#505868');
+    }
+  });
+  X.restore();
+  X.fillStyle='#101820'; X.fillRect(0, 416, 480, 16);
+  BTN(4, 418, 150, 14, '← BACK', ()=>{sfx('menu'); G.screen = G.prevScreen||'menu';});
+  BTN(160, 418, 155, 14, '↑ UP', ()=>G.bugdexScroll = Math.max(0, G.bugdexScroll - ih));
+  BTN(321, 418, 155, 14, '↓ DOWN', ()=>G.bugdexScroll += ih);
+}
+
+function drawLoadout(){
+  X.fillStyle='#0e1620';X.fillRect(0,0,480,432);
+  panel(0,0,480,30,'#f8f8e8');T('LOADOUT',240,22,9,'#303848','center');
+  // Scrolling list — every owned bug is here.
+  const rowH = 70;
+  const visY = 36;
+  const visH = 378;
+  const total = G.loadout.length;
+  G.loadoutScroll = G.loadoutScroll || 0;
+  G.loadoutScroll = Math.max(0, Math.min(G.loadoutScroll, Math.max(0, total*rowH - visH + 4)));
+  X.save();
+  X.beginPath(); X.rect(0, visY, 480, visH); X.clip();
+  G.loadout.forEach((inst, i) => {
+    const y = visY + 4 + i*rowH - G.loadoutScroll;
+    if(y + rowH < visY || y > visY + visH) return;
+    const inBattle = i < 6;
+    const b = BUGS[inst.id];
+    const ns = levelStats(inst.id, inst.level);
+    // Card background
+    X.fillStyle = inBattle ? '#e8e4d8' : '#d0ccc0';
+    X.fillRect(4, y, 472, rowH - 6);
+    X.strokeStyle = inBattle ? '#607040' : '#909888';
+    X.lineWidth = 2;
+    X.strokeRect(4, y, 472, rowH - 6);
+    // Sprite box
+    X.fillStyle = '#c4d8c0';
+    X.fillRect(8, y + 4, 56, rowH - 14);
+    drawBug(X, inst.id, 36, y + (rowH - 6) / 2 - 2, 1.5);
+    // Slot number bubble
+    X.fillStyle = inBattle ? '#304828' : '#605040';
+    X.fillRect(8, y + rowH - 22, 22, 14);
+    T(String(i + 1), 19, y + rowH - 12, 7, '#f0f8e8', 'center');
+    // Name (nickname if present)
+    const nameX = 76;
+    T(inst.nickname || b.name, nameX, y + 14, 8, '#303848');
+    if(inst.nickname){
+      T(b.name, nameX, y + 26, 5, '#607080');
+    }
+    // Level top-right (well away from type badge)
+    T('Lv. ' + inst.level, 462, y + 16, 8, '#303848', 'right');
+    // Type badge in its own row below the name
+    drawTypeBadge(nameX, y + 32, b.type);
+    // Stat line to the right of the type badge
+    T('ATK ' + ns.atk + ' · DEF ' + ns.def + ' · SPD ' + ns.spd, nameX + 52, y + 42, 5, '#506070');
+    // HP bar
+    T('HP', nameX, y + 55, 5, '#607080');
+    HPBAR(nameX + 18, y + 50, 168, inst.hp, ns.hp);
+    T(inst.hp + ' / ' + ns.hp, nameX + 196, y + 55, 5, '#506070');
+    // XP bar on the right side, below the level
+    const xpMax = xpForLevel(inst.level);
+    T('XP', 292, y + 55, 5, '#607080');
+    XPBAR(308, y + 53, 78, inst.xp, xpMax);
+    T(inst.xp + '/' + xpMax, 388, y + 55, 4, '#506070');
+    // Status badge below the level
+    X.fillStyle = inBattle ? '#304828' : '#604848';
+    X.fillRect(394, y + 24, 76, 14);
+    T(inBattle ? 'IN BATTLE' : 'RESERVE', 432, y + 34, 5, inBattle ? '#a0e880' : '#e8a080', 'center');
+    // Reorder controls on the far right
+    if(i > 0) BTN(394, y + 42, 36, 16, '↑', () => moveLoadout(i, -1));
+    if(i < G.loadout.length - 1) BTN(434, y + 42, 36, 16, '↓', () => moveLoadout(i, 1));
+  });
+  X.restore();
+  // Bottom bar
+  X.fillStyle = '#0e1620'; X.fillRect(0, 414, 480, 18);
+  BTN(4, 416, 100, 14, '← BACK', () => {sfx('menu'); G.screen = G.prevScreen || 'menu';});
+  BTN(110, 416, 100, 14, '↑ UP', () => G.loadoutScroll = Math.max(0, G.loadoutScroll - rowH));
+  BTN(216, 416, 100, 14, '↓ DOWN', () => G.loadoutScroll += rowH);
+  T('Top 6 = battle team', 360, 425, 5, '#9098a8', 'center');
+}
+
+// ═══════════════════════════════════════════════
+// IMPROVED BUG SPRITES — more anatomically true
+// (overrides the originals via SFN reassignment)
+// ═══════════════════════════════════════════════
+// Helper: pixel rect at scale s, no rounding artifacts
+function PX(c,ox,oy,x,y,w,h,col,s){
+  c.fillStyle=col;
+  c.fillRect(Math.round(ox+x*s), Math.round(oy+y*s), Math.max(1,Math.round(w*s)), Math.max(1,Math.round(h*s)));
+}
+
+// ─── STAG BEETLE ───
+// Big curved mandibles, dome elytra with seam, 6 legs, pronotum
+function spStagV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-13*s,t=cy-13*s;
+  // Legs (under, drawn first)
+  PX(c,o,t, -2,12, 4,2,'#1a0a04',s); PX(c,o,t,  0,15, 4,2,'#1a0a04',s); PX(c,o,t,  0,18, 4,2,'#1a0a04',s);
+  PX(c,o,t, 22,12, 4,2,'#1a0a04',s); PX(c,o,t, 22,15, 4,2,'#1a0a04',s); PX(c,o,t, 22,18, 4,2,'#1a0a04',s);
+  // Elytra (dome wing cases) — dark mahogany
+  PX(c,o,t, 4,8, 18,16,'#3a1808',s);    // base shape
+  PX(c,o,t, 5,7, 16,17,'#502010',s);    // mid tone
+  PX(c,o,t, 6,8, 14,14,'#6a3010',s);    // top dome
+  // Elytra highlight + seam
+  PX(c,o,t, 7,9, 4,2,'#a06030',s);
+  PX(c,o,t,12,8, 2,16,'#1a0a04',s);     // seam down middle
+  // Pronotum (thorax shield)
+  PX(c,o,t, 6,4, 14,5,'#3a1808',s);
+  PX(c,o,t, 7,4, 12,3,'#502010',s);
+  // Head
+  PX(c,o,t, 9,1, 8,4,'#1a0a04',s);
+  PX(c,o,t,10,2, 6,2,'#3a1808',s);
+  // Eyes
+  PX(c,o,t, 9,2, 2,2,'#e08020',s);
+  PX(c,o,t,15,2, 2,2,'#e08020',s);
+  // MANDIBLES (the star) — big curved pincers
+  PX(c,o,t, 7,-1, 3,3,'#1a0a04',s);    // left base
+  PX(c,o,t, 4,-3, 3,5,'#1a0a04',s);    // left mid
+  PX(c,o,t, 2,-7, 3,5,'#1a0a04',s);    // left tip-out
+  PX(c,o,t, 5,-8, 4,2,'#1a0a04',s);    // left curl-in
+  PX(c,o,t, 8,-7, 2,2,'#1a0a04',s);    // left tip
+  // teeth
+  PX(c,o,t, 5,-4, 2,1,'#502010',s);
+  PX(c,o,t, 3,-2, 1,2,'#502010',s);
+  PX(c,o,t,16,-1, 3,3,'#1a0a04',s);    // right base
+  PX(c,o,t,19,-3, 3,5,'#1a0a04',s);
+  PX(c,o,t,21,-7, 3,5,'#1a0a04',s);
+  PX(c,o,t,17,-8, 4,2,'#1a0a04',s);
+  PX(c,o,t,16,-7, 2,2,'#1a0a04',s);
+  PX(c,o,t,19,-4, 2,1,'#502010',s);
+  PX(c,o,t,22,-2, 1,2,'#502010',s);
+  c.restore();
+}
+
+// ─── BUMBLEBEE ───
+// Round fuzzy body, distinct yellow/black bands, 4 wings, big eyes
+function spBeeV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-11*s,t=cy-11*s;
+  // 4 wings (behind body) - translucent
+  c.fillStyle='rgba(220,240,255,0.55)';
+  c.fillRect(Math.round(o-7*s),Math.round(t+4*s),Math.max(1,Math.round(11*s)),Math.max(1,Math.round(7*s)));
+  c.fillRect(Math.round(o-9*s),Math.round(t+9*s),Math.max(1,Math.round(11*s)),Math.max(1,Math.round(5*s)));
+  c.fillRect(Math.round(o+18*s),Math.round(t+4*s),Math.max(1,Math.round(11*s)),Math.max(1,Math.round(7*s)));
+  c.fillRect(Math.round(o+20*s),Math.round(t+9*s),Math.max(1,Math.round(11*s)),Math.max(1,Math.round(5*s)));
+  // wing veins
+  PX(c,o,t,-5,7, 9,1,'rgba(255,255,255,0.6)',s);
+  PX(c,o,t,17,7, 9,1,'rgba(255,255,255,0.6)',s);
+  // Body — rounded
+  PX(c,o,t, 3,6, 16,12,'#181818',s);   // outline base
+  PX(c,o,t, 2,8, 18,8, '#181818',s);
+  PX(c,o,t, 4,7, 14,10,'#f0c020',s);   // yellow base
+  // Black bands
+  PX(c,o,t, 4,7, 14,3,'#181818',s);    // top band
+  PX(c,o,t, 4,11,14,3,'#181818',s);    // middle band
+  PX(c,o,t, 4,15,14,2,'#181818',s);    // bottom band
+  PX(c,o,t, 7,17, 8,2,'#181818',s);    // tail tip
+  // Fuzz texture
+  PX(c,o,t, 5,7, 1,1,'#f8d840',s); PX(c,o,t, 9,8, 1,1,'#f8d840',s); PX(c,o,t,14,9, 1,1,'#f8d840',s);
+  PX(c,o,t, 6,14, 1,1,'#f8d840',s); PX(c,o,t,12,14, 1,1,'#f8d840',s);
+  // Head
+  PX(c,o,t, 5,2, 12,5,'#181818',s);
+  PX(c,o,t, 6,3, 10,3,'#282828',s);
+  // Big compound eyes
+  PX(c,o,t, 5,3, 4,3,'#1a1a1a',s);
+  PX(c,o,t,13,3, 4,3,'#1a1a1a',s);
+  PX(c,o,t, 6,3, 2,1,'#f8d840',s);     // eye gleam
+  PX(c,o,t,14,3, 2,1,'#f8d840',s);
+  // Antennae
+  PX(c,o,t, 6,-1, 1,3,'#181818',s);
+  PX(c,o,t, 4,-3, 2,1,'#181818',s);
+  PX(c,o,t,15,-1, 1,3,'#181818',s);
+  PX(c,o,t,16,-3, 2,1,'#181818',s);
+  // Stinger
+  PX(c,o,t,10,19, 2,2,'#181818',s);
+  c.restore();
+}
+
+// ─── FIREFLY ───
+// Elongated beetle body, red pronotum, dark elytra, glowing abdomen
+function spFireflyV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-7*s,t=cy-14*s;
+  // Glow aura around abdomen
+  c.fillStyle='rgba(240,255,120,0.35)';
+  c.fillRect(Math.round(o-3*s),Math.round(t+15*s),Math.max(1,Math.round(20*s)),Math.max(1,Math.round(12*s)));
+  c.fillStyle='rgba(255,255,200,0.25)';
+  c.fillRect(Math.round(o-6*s),Math.round(t+12*s),Math.max(1,Math.round(26*s)),Math.max(1,Math.round(16*s)));
+  // Body outline
+  PX(c,o,t, 1,3, 12,24,'#181818',s);
+  // Pronotum (red shield)
+  PX(c,o,t, 2,4, 10,5,'#c81818',s);
+  PX(c,o,t, 3,4, 8,2,'#f04030',s);     // highlight
+  PX(c,o,t, 6,4, 2,5,'#181818',s);     // black center spot
+  // Elytra (dark grey wing cases)
+  PX(c,o,t, 2,9, 10,10,'#282828',s);
+  PX(c,o,t, 3,10, 8,8,'#383838',s);
+  PX(c,o,t, 6,9, 2,10,'#101010',s);    // seam
+  PX(c,o,t, 4,11, 2,2,'#484848',s);    // highlight
+  // Glowing abdomen segments
+  PX(c,o,t, 3,19, 8,7,'#181818',s);
+  PX(c,o,t, 4,19, 6,2,'#a8a040',s);    // dim seg
+  PX(c,o,t, 3,21, 8,4,'#f8e040',s);    // bright glow
+  PX(c,o,t, 4,21, 6,3,'#ffffa8',s);
+  PX(c,o,t, 5,22, 4,1,'#ffffff',s);    // brightest
+  // Head (small)
+  PX(c,o,t, 4,0, 6,4,'#181818',s);
+  PX(c,o,t, 4,1, 2,2,'#383838',s);     // eye
+  PX(c,o,t, 8,1, 2,2,'#383838',s);     // eye
+  // Antennae
+  PX(c,o,t, 4,-3, 1,3,'#181818',s);
+  PX(c,o,t, 9,-3, 1,3,'#181818',s);
+  PX(c,o,t, 2,-4, 2,1,'#181818',s);
+  PX(c,o,t,10,-4, 2,1,'#181818',s);
+  // Legs
+  PX(c,o,t, 0,11, 2,1,'#181818',s); PX(c,o,t, 0,14, 2,1,'#181818',s); PX(c,o,t, 0,17, 2,1,'#181818',s);
+  PX(c,o,t,12,11, 2,1,'#181818',s); PX(c,o,t,12,14, 2,1,'#181818',s); PX(c,o,t,12,17, 2,1,'#181818',s);
+  c.restore();
+}
+
+// ─── WATER STRIDER ───
+// Tiny body, very long thin legs spread wide
+function spStriderV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-6*s,t=cy-3*s;
+  // 6 legs — extremely long, thin, spread out wide
+  // Front legs (short, used like arms)
+  PX(c,o,t,-4,2, 6,1,'#1a3050',s);
+  PX(c,o,t,-5,1, 2,2,'#1a3050',s);
+  PX(c,o,t,10,2, 6,1,'#1a3050',s);
+  PX(c,o,t,13,1, 2,2,'#1a3050',s);
+  // Middle legs - LONGEST, used for rowing
+  PX(c,o,t,-14,5, 14,1,'#1a3050',s);
+  PX(c,o,t,-16,4, 3,2,'#1a3050',s);
+  PX(c,o,t,12,5, 14,1,'#1a3050',s);
+  PX(c,o,t,25,4, 3,2,'#1a3050',s);
+  // Rear legs - long, used for steering
+  PX(c,o,t,-12,8, 12,1,'#1a3050',s);
+  PX(c,o,t,-14,7, 3,2,'#1a3050',s);
+  PX(c,o,t,12,8, 12,1,'#1a3050',s);
+  PX(c,o,t,23,7, 3,2,'#1a3050',s);
+  // Water dimples under each foot
+  c.fillStyle='rgba(255,255,255,0.4)';
+  [[-16,5],[-14,9],[-16,3],[25,5],[23,9],[25,3]].forEach(([lx,ly])=>{
+    c.fillRect(Math.round(o+lx*s),Math.round(t+(ly+2)*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(1*s)));
+  });
+  // Thin elongated body
+  PX(c,o,t, 4,0, 4,12,'#2a4870',s);
+  PX(c,o,t, 5,1, 2,10,'#3a5888',s);
+  PX(c,o,t, 4,0, 4,2,'#1a3050',s);     // head darker
+  // Eyes
+  PX(c,o,t, 4,1, 1,1,'#e83020',s);
+  PX(c,o,t, 7,1, 1,1,'#e83020',s);
+  // Antennae
+  PX(c,o,t, 4,-2, 1,2,'#1a3050',s);
+  PX(c,o,t, 7,-2, 1,2,'#1a3050',s);
+  c.restore();
+}
+
+// ─── AMBUSH BUG ───
+// Leaf-like camo body, raptorial forelegs held up like a mantis
+function spAmbushV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-10*s,t=cy-13*s;
+  // 4 back legs
+  PX(c,o,t,-2,14, 5,1,'#2a5010',s); PX(c,o,t,-3,16, 6,1,'#2a5010',s);
+  PX(c,o,t,17,14, 5,1,'#2a5010',s); PX(c,o,t,17,16, 6,1,'#2a5010',s);
+  PX(c,o,t,-2,19, 5,1,'#2a5010',s); PX(c,o,t,17,19, 5,1,'#2a5010',s);
+  // Wide leaf-shaped abdomen
+  PX(c,o,t, 2,10, 16,12,'#3a6018',s);
+  PX(c,o,t, 4,11, 12,11,'#4a7028',s);
+  PX(c,o,t, 3,12, 14,8,'#5a8838',s);
+  PX(c,o,t, 9,10, 2,12,'#1a3008',s);    // leaf central vein
+  // Leaf side veins
+  PX(c,o,t, 6,13, 4,1,'#2a4810',s); PX(c,o,t,10,13, 4,1,'#2a4810',s);
+  PX(c,o,t, 5,16, 5,1,'#2a4810',s); PX(c,o,t,10,16, 5,1,'#2a4810',s);
+  // Pronotum
+  PX(c,o,t, 5,7, 10,4,'#3a6018',s);
+  PX(c,o,t, 6,7, 8,2,'#5a8838',s);
+  // Head
+  PX(c,o,t, 7,3, 6,5,'#3a6018',s);
+  PX(c,o,t, 8,4, 4,3,'#4a7028',s);
+  // Eyes - red beady
+  PX(c,o,t, 7,4, 2,2,'#c81810',s);
+  PX(c,o,t,11,4, 2,2,'#c81810',s);
+  PX(c,o,t, 8,4, 1,1,'#400000',s);
+  PX(c,o,t,12,4, 1,1,'#400000',s);
+  // Long antennae
+  PX(c,o,t, 7,0, 1,3,'#2a4810',s);
+  PX(c,o,t,12,0, 1,3,'#2a4810',s);
+  PX(c,o,t, 5,-2, 2,1,'#2a4810',s);
+  PX(c,o,t,13,-2, 2,1,'#2a4810',s);
+  // RAPTORIAL FORELEGS — held forward/up like a mantis
+  PX(c,o,t, 4,5, 1,3,'#2a4810',s);     // left upper
+  PX(c,o,t, 1,3, 3,3,'#3a6018',s);     // left mid bulge
+  PX(c,o,t, -1,1, 2,3,'#3a6018',s);    // left forearm
+  PX(c,o,t, -2,-1, 2,3,'#2a4810',s);   // left claw
+  PX(c,o,t, -3,0, 1,1,'#1a3008',s);    // tip
+  // Right raptorial
+  PX(c,o,t,15,5, 1,3,'#2a4810',s);
+  PX(c,o,t,16,3, 3,3,'#3a6018',s);
+  PX(c,o,t,19,1, 2,3,'#3a6018',s);
+  PX(c,o,t,20,-1, 2,3,'#2a4810',s);
+  PX(c,o,t,21,0, 1,1,'#1a3008',s);
+  c.restore();
+}
+
+// ─── CARRION BEETLE ───
+// Black with iconic orange/red banded elytra
+function spCarrionV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-13*s;
+  // Legs
+  PX(c,o,t,-2,14, 5,1,'#0a0a0a',s); PX(c,o,t,-3,17, 6,1,'#0a0a0a',s); PX(c,o,t,-2,20, 5,1,'#0a0a0a',s);
+  PX(c,o,t,21,14, 5,1,'#0a0a0a',s); PX(c,o,t,21,17, 6,1,'#0a0a0a',s); PX(c,o,t,21,20, 5,1,'#0a0a0a',s);
+  // Elytra (dome wing cases) - BLACK
+  PX(c,o,t, 2,9, 20,15,'#0a0a0a',s);
+  PX(c,o,t, 3,8, 18,16,'#0a0a0a',s);
+  // Iconic orange/red bands (3-4 bands)
+  PX(c,o,t, 4,10, 16,2,'#e84418',s);
+  PX(c,o,t, 4,10, 16,1,'#ff6028',s);   // top band highlight
+  PX(c,o,t, 4,15, 16,2,'#e84418',s);
+  PX(c,o,t, 4,15, 16,1,'#ff6028',s);
+  PX(c,o,t, 4,20, 16,2,'#e84418',s);
+  // Elytra seam
+  PX(c,o,t,11,9, 2,15,'#000',s);
+  // Pronotum
+  PX(c,o,t, 5,5, 14,5,'#1a1a1a',s);
+  PX(c,o,t, 6,5, 12,3,'#2a2a2a',s);
+  // Head
+  PX(c,o,t, 8,1, 8,5,'#0a0a0a',s);
+  PX(c,o,t, 9,2, 6,3,'#1a1a1a',s);
+  // Eyes
+  PX(c,o,t, 8,2, 2,2,'#e84418',s);
+  PX(c,o,t,14,2, 2,2,'#e84418',s);
+  // Clubbed antennae (carrion beetle signature)
+  PX(c,o,t, 8,-2, 1,3,'#0a0a0a',s);
+  PX(c,o,t,15,-2, 1,3,'#0a0a0a',s);
+  PX(c,o,t, 6,-3, 3,2,'#0a0a0a',s);    // club tip
+  PX(c,o,t,15,-3, 3,2,'#0a0a0a',s);    // club tip
+  c.restore();
+}
+
+// ─── GARDEN SLUG ───
+// Soft body, 4 tentacles (2 long eyes, 2 short)
+function spSlugV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-14*s,t=cy-7*s;
+  // Slime trail
+  c.fillStyle='rgba(180,210,255,0.35)';
+  c.fillRect(Math.round(o+24*s),Math.round(t+7*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(4*s)));
+  // Body (long teardrop shape)
+  PX(c,o,t, 2,2, 22,10,'#7a5038',s);     // base outline
+  PX(c,o,t, 1,3, 24,8,'#7a5038',s);
+  PX(c,o,t, 3,2, 20,10,'#9a7050',s);     // body
+  PX(c,o,t, 4,3, 18,8,'#b08a60',s);
+  PX(c,o,t, 5,3, 16,3,'#c8a070',s);      // top highlight
+  // Mantle (head end is left)
+  PX(c,o,t, 2,4, 8,6,'#7a5038',s);
+  PX(c,o,t, 3,5, 6,4,'#9a7050',s);
+  // Side patterning (stripes)
+  PX(c,o,t, 6,9, 16,1,'#5a3820',s);
+  PX(c,o,t, 8,11, 14,1,'#5a3820',s);
+  // Tail tip (right end thins)
+  PX(c,o,t,24,5, 2,4,'#7a5038',s);
+  PX(c,o,t,25,6, 2,2,'#9a7050',s);
+  // Foot (lighter underbelly)
+  PX(c,o,t, 4,10, 20,2,'#a08868',s);
+  // 4 tentacles on head end (left side)
+  // Upper (eye stalks) — long
+  PX(c,o,t, 1,-3, 1,5,'#9a7050',s);
+  PX(c,o,t, 0,-4, 2,2,'#9a7050',s);
+  PX(c,o,t, 0,-4, 1,1,'#181818',s);      // eye
+  PX(c,o,t, 5,-3, 1,5,'#9a7050',s);
+  PX(c,o,t, 4,-4, 2,2,'#9a7050',s);
+  PX(c,o,t, 5,-4, 1,1,'#181818',s);      // eye
+  // Lower (sensory) — shorter, downward
+  PX(c,o,t, 2,11, 1,2,'#9a7050',s);
+  PX(c,o,t, 4,11, 1,2,'#9a7050',s);
+  // Slime sparkles
+  c.fillStyle='rgba(255,255,255,0.7)';
+  c.fillRect(Math.round(o+8*s),Math.round(t+4*s),Math.max(1,Math.round(s)),Math.max(1,Math.round(s)));
+  c.fillRect(Math.round(o+16*s),Math.round(t+3*s),Math.max(1,Math.round(s)),Math.max(1,Math.round(s)));
+  c.restore();
+}
+
+// ─── DRAGONFLY LARVA (nymph) ───
+function spLarvaV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-8*s,t=cy-14*s;
+  // Body segments
+  PX(c,o,t, 1,5, 14,22,'#3a2810',s);
+  PX(c,o,t, 0,7, 16,18,'#4a3818',s);
+  PX(c,o,t, 2,7, 12,18,'#5a4020',s);
+  PX(c,o,t, 3,7, 10,18,'#6a5028',s);
+  // Segment lines
+  for(let i=0;i<5;i++){PX(c,o,t, 0,10+i*4, 16,1,'#2a1808',s);}
+  // Wing pads on thorax (developing)
+  PX(c,o,t, 0,8, 4,4,'#2a1808',s);
+  PX(c,o,t,12,8, 4,4,'#2a1808',s);
+  PX(c,o,t, 1,9, 2,3,'#4a3818',s);
+  PX(c,o,t,13,9, 2,3,'#4a3818',s);
+  // Spiky legs
+  PX(c,o,t,-3,11, 4,1,'#2a1808',s);
+  PX(c,o,t,15,11, 4,1,'#2a1808',s);
+  PX(c,o,t,-3,16, 4,1,'#2a1808',s);
+  PX(c,o,t,15,16, 4,1,'#2a1808',s);
+  PX(c,o,t,-3,21, 4,1,'#2a1808',s);
+  PX(c,o,t,15,21, 4,1,'#2a1808',s);
+  // Tail (gills)
+  PX(c,o,t, 5,27, 2,3,'#3a2810',s);
+  PX(c,o,t, 9,27, 2,3,'#3a2810',s);
+  PX(c,o,t, 7,28, 2,3,'#3a2810',s);
+  // Head
+  PX(c,o,t, 2,1, 12,6,'#2a1808',s);
+  PX(c,o,t, 3,2, 10,4,'#3a2810',s);
+  // BIG bulging eyes
+  PX(c,o,t, 1,2, 4,4,'#1a1010',s);
+  PX(c,o,t,11,2, 4,4,'#1a1010',s);
+  PX(c,o,t, 2,2, 2,2,'#a04020',s);
+  PX(c,o,t,12,2, 2,2,'#a04020',s);
+  PX(c,o,t, 2,2, 1,1,'#ff8040',s);     // eye gleam
+  PX(c,o,t,12,2, 1,1,'#ff8040',s);
+  // Extendable jaw mask (signature feature) — hanging down
+  PX(c,o,t, 6,5, 4,3,'#2a1808',s);
+  PX(c,o,t, 7,6, 2,1,'#5a4020',s);
+  c.restore();
+}
+
+// ─── WATER BUG (giant water bug) ───
+function spWaterbugV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-11*s;
+  // Flat oval body
+  PX(c,o,t, 3,3, 18,16,'#1a3818',s);
+  PX(c,o,t, 1,5, 22,12,'#1a3818',s);
+  PX(c,o,t, 3,4, 18,14,'#2a4820',s);
+  PX(c,o,t, 4,5, 16,12,'#3a5820',s);
+  // Wing markings
+  PX(c,o,t,11,4, 2,14,'#1a3818',s);    // central seam
+  PX(c,o,t, 5,7, 6,1,'#1a3818',s);
+  PX(c,o,t,13,7, 6,1,'#1a3818',s);
+  // Head
+  PX(c,o,t, 8,0, 8,4,'#1a3818',s);
+  PX(c,o,t, 9,1, 6,2,'#2a4820',s);
+  // Eyes (large compound)
+  PX(c,o,t, 7,1, 3,3,'#181010',s);
+  PX(c,o,t,14,1, 3,3,'#181010',s);
+  PX(c,o,t, 8,1, 1,1,'#c04000',s);     // eye gleam
+  PX(c,o,t,15,1, 1,1,'#c04000',s);
+  // Raptorial front legs (folded forward — predatory!)
+  PX(c,o,t, 1,5, 3,2,'#1a3818',s);
+  PX(c,o,t,-1,6, 3,3,'#1a3818',s);
+  PX(c,o,t,-2,4, 2,3,'#1a3818',s);     // claw tip
+  PX(c,o,t,20,5, 3,2,'#1a3818',s);
+  PX(c,o,t,22,6, 3,3,'#1a3818',s);
+  PX(c,o,t,23,4, 2,3,'#1a3818',s);
+  // Middle + rear legs (fringed swimming legs)
+  PX(c,o,t,-3,10, 5,1,'#1a3818',s); PX(c,o,t,-4,11, 6,1,'#1a3818',s);
+  PX(c,o,t,21,10, 5,1,'#1a3818',s); PX(c,o,t,22,11, 6,1,'#1a3818',s);
+  PX(c,o,t,-3,15, 5,1,'#1a3818',s); PX(c,o,t,-4,16, 6,1,'#1a3818',s);
+  PX(c,o,t,21,15, 5,1,'#1a3818',s); PX(c,o,t,22,16, 6,1,'#1a3818',s);
+  // Breathing tube at rear (siphon)
+  PX(c,o,t,10,18, 1,4,'#1a3818',s);
+  PX(c,o,t,13,18, 1,4,'#1a3818',s);
+  c.restore();
+}
+
+// Reassign sprites in SFN dispatch table
+SFN.stag = spStagV2;
+SFN.bee = spBeeV2;
+SFN.firefly = spFireflyV2;
+SFN.strider = spStriderV2;
+SFN.ambush = spAmbushV2;
+SFN.carrion = spCarrionV2;
+SFN.slug = spSlugV2;
+SFN.larva = spLarvaV2;
+SFN.waterbug = spWaterbugV2;
+
+// ─── BACKSWIMMER ───
+// Pale boat-shaped body that swims upside down, oar-like hind legs
+function spBackswimV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-8*s,t=cy-10*s;
+  // Boat-shaped body (swims upside down so light belly is up)
+  PX(c,o,t, 1,2, 14,16,'#a08850',s);    // dark back (now showing)
+  PX(c,o,t, 0,4, 16,12,'#b89860',s);
+  PX(c,o,t, 2,3, 12,14,'#d8b870',s);    // pale belly
+  PX(c,o,t, 3,4, 10,12,'#e8c880',s);
+  // Keel line down center
+  PX(c,o,t, 7,3, 2,14,'#a08850',s);
+  // Wing fold/markings
+  PX(c,o,t, 2,7, 5,1,'#a08850',s);
+  PX(c,o,t, 9,7, 5,1,'#a08850',s);
+  PX(c,o,t, 3,11, 4,1,'#a08850',s);
+  PX(c,o,t, 9,11, 4,1,'#a08850',s);
+  // Head (small, pointed forward)
+  PX(c,o,t, 4,0, 8,3,'#806038',s);
+  PX(c,o,t, 5,1, 6,1,'#a08850',s);
+  // Red compound eyes
+  PX(c,o,t, 3,1, 3,2,'#c83020',s);
+  PX(c,o,t,10,1, 3,2,'#c83020',s);
+  PX(c,o,t, 3,1, 1,1,'#600000',s);
+  PX(c,o,t,10,1, 1,1,'#600000',s);
+  // Front legs (short)
+  PX(c,o,t,-1,5, 3,1,'#806038',s);
+  PX(c,o,t,14,5, 3,1,'#806038',s);
+  // Middle legs
+  PX(c,o,t,-2,9, 4,1,'#806038',s);
+  PX(c,o,t,14,9, 4,1,'#806038',s);
+  // OAR-like hind legs (signature feature — long, fringed for swimming)
+  PX(c,o,t,-18,12, 18,2,'#806038',s);
+  PX(c,o,t,16,12, 18,2,'#806038',s);
+  // Oar fringes (hair-like)
+  for(let i=0;i<8;i++){
+    PX(c,o,t,-16+i*2,14, 1,2,'#806038',s);
+    PX(c,o,t,16+i*2,14, 1,2,'#806038',s);
+  }
+  // Oar paddle ends
+  PX(c,o,t,-20,11, 4,4,'#604018',s);
+  PX(c,o,t,32,11, 4,4,'#604018',s);
+  // Air bubble trail (signature — they carry air bubbles)
+  c.fillStyle='rgba(255,255,255,0.55)';
+  c.beginPath(); c.arc(o+8*s, t+19*s, 2*s, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.arc(o+11*s, t+22*s, 1.2*s, 0, Math.PI*2); c.fill();
+  c.restore();
+}
+
+// ─── SHROOM FLY ───
+// A FLY with mushroom-spotted wings + cap-shaped thorax
+function spShroomflyV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-9*s,t=cy-12*s;
+  // Wings (translucent with red mushroom spots)
+  c.fillStyle='rgba(240,240,240,0.55)';
+  c.fillRect(Math.round(o-5*s),Math.round(t+8*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(6*s)));
+  c.fillRect(Math.round(o+13*s),Math.round(t+8*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(6*s)));
+  // wing spots (mushroom red)
+  PX(c,o,t,-3,9, 2,2,'#c81818',s);
+  PX(c,o,t,-1,11, 2,2,'#c81818',s);
+  PX(c,o,t,15,9, 2,2,'#c81818',s);
+  PX(c,o,t,17,11, 2,2,'#c81818',s);
+  // wing veins
+  PX(c,o,t,-4,11, 7,1,'rgba(180,180,180,0.7)',s);
+  PX(c,o,t,15,11, 7,1,'rgba(180,180,180,0.7)',s);
+  // Body — fly thorax
+  PX(c,o,t, 3,5, 12,10,'#1a1a1a',s);
+  PX(c,o,t, 2,7, 14,7,'#2a2a2a',s);
+  PX(c,o,t, 4,6, 10,8,'#3a3a3a',s);
+  // Mushroom cap on top of thorax (red with white spots)
+  PX(c,o,t, 2,2, 14,5,'#a01818',s);
+  PX(c,o,t, 1,3, 16,4,'#c82820',s);
+  PX(c,o,t, 3,2, 12,3,'#e83828',s);
+  PX(c,o,t, 4,2, 4,2,'#fff',s);         // white spot
+  PX(c,o,t,11,3, 3,2,'#fff',s);         // white spot
+  PX(c,o,t, 7,1, 4,2,'#fff',s);         // top spot
+  // Underside (gills)
+  PX(c,o,t, 3,6, 12,1,'#600000',s);
+  // Abdomen (banded segments)
+  PX(c,o,t, 4,14, 10,8,'#1a1a1a',s);
+  PX(c,o,t, 5,15, 8,7,'#3a3a3a',s);
+  PX(c,o,t, 5,15, 8,1,'#fff',s);
+  PX(c,o,t, 5,18, 8,1,'#aaa',s);
+  PX(c,o,t, 5,21, 8,1,'#aaa',s);
+  // Big compound eyes (fly trademark)
+  PX(c,o,t, 1,5, 4,4,'#600000',s);
+  PX(c,o,t,13,5, 4,4,'#600000',s);
+  PX(c,o,t, 1,5, 4,2,'#c02000',s);
+  PX(c,o,t,13,5, 4,2,'#c02000',s);
+  PX(c,o,t, 2,5, 1,1,'#fff',s);
+  PX(c,o,t,14,5, 1,1,'#fff',s);
+  // Antennae
+  PX(c,o,t, 6,0, 1,2,'#1a1a1a',s);
+  PX(c,o,t,11,0, 1,2,'#1a1a1a',s);
+  // Legs
+  PX(c,o,t, 1,14, 2,2,'#1a1a1a',s); PX(c,o,t,-1,16, 3,1,'#1a1a1a',s);
+  PX(c,o,t,15,14, 2,2,'#1a1a1a',s); PX(c,o,t,16,16, 3,1,'#1a1a1a',s);
+  PX(c,o,t, 1,18, 2,2,'#1a1a1a',s);
+  PX(c,o,t,15,18, 2,2,'#1a1a1a',s);
+  c.restore();
+}
+
+// ─── FUNGUS BEETLE ───
+// Beetle with mushroom-like growth on back
+function spFungusV2(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-11*s,t=cy-12*s;
+  // Legs
+  PX(c,o,t,-1,13, 4,1,'#1a3008',s); PX(c,o,t,-2,16, 5,1,'#1a3008',s); PX(c,o,t,-1,19, 4,1,'#1a3008',s);
+  PX(c,o,t,18,13, 4,1,'#1a3008',s); PX(c,o,t,18,16, 5,1,'#1a3008',s); PX(c,o,t,18,19, 4,1,'#1a3008',s);
+  // Elytra (deep forest green)
+  PX(c,o,t, 2,8, 18,13,'#1a4008',s);
+  PX(c,o,t, 3,7, 16,15,'#2a5810',s);
+  PX(c,o,t, 4,8, 14,12,'#3a6818',s);
+  // Mottled patches (fungal)
+  PX(c,o,t, 6,10, 3,2,'#506030',s);
+  PX(c,o,t,13,12, 3,2,'#506030',s);
+  PX(c,o,t, 5,15, 2,2,'#708840',s);
+  PX(c,o,t,14,15, 2,2,'#708840',s);
+  PX(c,o,t, 9,18, 4,2,'#506030',s);
+  // Elytra seam
+  PX(c,o,t,10,7, 2,14,'#0a2008',s);
+  // Tiny mushroom growths sprouting from the back!
+  // Mushroom 1 (small red)
+  PX(c,o,t, 5,5, 4,3,'#a01818',s);
+  PX(c,o,t, 4,5, 1,2,'#a01818',s);
+  PX(c,o,t, 9,5, 1,2,'#a01818',s);
+  PX(c,o,t, 6,5, 2,1,'#fff',s);
+  PX(c,o,t, 6,7, 2,2,'#d8d0a0',s);      // stem
+  // Mushroom 2 (yellow)
+  PX(c,o,t,13,4, 4,3,'#e0a020',s);
+  PX(c,o,t,12,4, 1,2,'#e0a020',s);
+  PX(c,o,t,17,4, 1,2,'#e0a020',s);
+  PX(c,o,t,14,4, 2,1,'#f8c040',s);
+  PX(c,o,t,14,6, 2,2,'#d8d0a0',s);      // stem
+  // Pronotum
+  PX(c,o,t, 5,4, 12,4,'#1a4008',s);
+  PX(c,o,t, 6,4, 10,2,'#2a5810',s);
+  // Head
+  PX(c,o,t, 7,1, 8,4,'#1a3008',s);
+  PX(c,o,t, 8,2, 6,2,'#2a5810',s);
+  // Eyes
+  PX(c,o,t, 7,2, 2,2,'#c06000',s);
+  PX(c,o,t,13,2, 2,2,'#c06000',s);
+  // Antennae
+  PX(c,o,t, 7,-1, 1,2,'#1a3008',s);
+  PX(c,o,t,14,-1, 1,2,'#1a3008',s);
+  PX(c,o,t, 5,-2, 2,1,'#1a3008',s);
+  PX(c,o,t,14,-2, 2,1,'#1a3008',s);
+  c.restore();
+}
+
+SFN.backswim = spBackswimV2;
+SFN.shroomfly = spShroomflyV2;
+SFN.fungus = spFungusV2;
+
+// ═══════════════════════════════════════════════
+// NEW BUGS — trainer-only rewards (not found in grass/water)
+// ═══════════════════════════════════════════════
+Object.assign(BUGS, {
+  stinkbug: {name:'STINK BUG',     type:'BEETLE',  hp:50,atk:14,def:14,spd:10,zone:1, trainerOnly:true, moves:['Stink Cloud','Shield Bash','Bite','Lunge']},
+  worm:     {name:'EARTHWORM',     type:'MOLD',    hp:58,atk:12,def:12,spd:6, zone:1, trainerOnly:true, moves:['Wriggle','Dig','Slime Trail','Smother']},
+  boatman:  {name:'WATER BOATMAN', type:'AQUATIC', hp:40,atk:13,def:11,spd:18,zone:2, trainerOnly:true, moves:['Row Strike','Dive Bomb','Water Jet','Quick Dart']},
+  diver:    {name:'DIVING BEETLE', type:'AQUATIC', hp:52,atk:16,def:14,spd:12,zone:2, trainerOnly:true, moves:['Plunge','Submarine','Surf Slash','Pincer']},
+  mayfly:   {name:'MAYFLY',        type:'FLYING',  hp:34,atk:17,def:7, spd:22,zone:3, trainerOnly:true, moves:['Ephemeral','Gust','Flash Burst','Dart']},
+  pillbug:  {name:'PILLBUG',       type:'BEETLE',  hp:60,atk:12,def:18,spd:8, zone:3, trainerOnly:true, moves:['Roll Up','Armour Up','Bash','Guard']},
+});
+Object.assign(MOVES, {
+  'Stink Cloud':{p:0,a:1,e:'espd-',t:'MOLD'},
+  'Shield Bash':{p:10,a:.9,t:'BEETLE'},
+  'Wriggle':    {p:8, a:.95},
+  'Dig':        {p:9, a:.9, t:'MOLD'},
+  'Row Strike': {p:10,a:.9, t:'AQUATIC'},
+  'Plunge':     {p:11,a:.85,t:'AQUATIC'},
+  'Submarine':  {p:0, a:1, e:'def+', t:'AQUATIC'},
+  'Ephemeral':  {p:11,a:.95},
+  'Roll Up':    {p:0, a:1, e:'def+', t:'BEETLE'},
+});
+
+// ─── STINK BUG ───
+function spStinkbug(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-11*s,t=cy-11*s;
+  PX(c,o,t,-1,11, 3,1,'#1a3008',s); PX(c,o,t,-1,14, 3,1,'#1a3008',s); PX(c,o,t,-1,17, 3,1,'#1a3008',s);
+  PX(c,o,t,20,11, 3,1,'#1a3008',s); PX(c,o,t,20,14, 3,1,'#1a3008',s); PX(c,o,t,20,17, 3,1,'#1a3008',s);
+  PX(c,o,t, 1,6, 20,12,'#3a6018',s);
+  PX(c,o,t, 3,5, 16,15,'#4a7820',s);
+  PX(c,o,t, 5,4, 12,17,'#5a8a28',s);
+  PX(c,o,t, 8,7, 6,8,'#2a4818',s);
+  PX(c,o,t, 9,7, 4,7,'#3a6018',s);
+  PX(c,o,t,10,11, 2,4,'#2a4818',s);
+  PX(c,o,t, 4,3, 14,3,'#3a6018',s);
+  PX(c,o,t, 5,2, 12,2,'#4a7820',s);
+  PX(c,o,t, 7,0, 8,3,'#3a6018',s);
+  PX(c,o,t, 6,1, 2,2,'#c81810',s);
+  PX(c,o,t,14,1, 2,2,'#c81810',s);
+  PX(c,o,t, 7,-2, 1,2,'#1a3008',s);
+  PX(c,o,t,14,-2, 1,2,'#1a3008',s);
+  PX(c,o,t, 5,-3, 2,1,'#1a3008',s);
+  PX(c,o,t,14,-3, 2,1,'#1a3008',s);
+  PX(c,o,t, 1,8, 3,8,'#80a040',s);
+  PX(c,o,t,18,8, 3,8,'#80a040',s);
+  c.fillStyle='rgba(150,200,80,0.4)';
+  c.fillRect(Math.round(o-3*s),Math.round(t+3*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  c.fillRect(Math.round(o+22*s),Math.round(t+5*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  c.restore();
+}
+
+// ─── EARTHWORM ───
+function spWorm(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-14*s,t=cy-5*s;
+  const seg=[[1,3],[3,2],[5,1],[7,1],[9,2],[11,3],[13,4],[15,5],[17,5],[19,4],[21,3],[23,3],[25,4],[27,5]];
+  for(let i=0;i<seg.length;i++){
+    const [x1,y1]=seg[i];
+    PX(c,o,t, x1,y1-1, 2,4,'#8a5040',s);
+    PX(c,o,t, x1,y1, 2,3,'#c08070',s);
+    PX(c,o,t, x1,y1+1, 2,1,'#a06050',s);
+  }
+  for(let i=0;i<14;i++){
+    const sx=1+i*2;
+    const sy=seg[i]?seg[i][1]:3;
+    PX(c,o,t, sx+1, sy, 1,3,'#6a3828',s);
+  }
+  PX(c,o,t, 9,1, 4,4,'#f0c8b0',s);
+  PX(c,o,t,-1,3, 3,2,'#a06050',s);
+  PX(c,o,t,-2,3, 2,2,'#8a5040',s);
+  PX(c,o,t,-2,4, 1,1,'#4a2010',s);
+  PX(c,o,t,27,5, 2,1,'#8a5040',s);
+  c.fillStyle='rgba(200,220,255,0.4)';
+  c.fillRect(Math.round(o+0*s),Math.round(t+7*s),Math.max(1,Math.round(28*s)),Math.max(1,Math.round(1*s)));
+  c.restore();
+}
+
+// ─── WATER BOATMAN ───
+function spBoatman(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-9*s,t=cy-9*s;
+  PX(c,o,t, 1,2, 16,13,'#4a3818',s);
+  PX(c,o,t, 0,4, 18,9, '#5a4020',s);
+  PX(c,o,t, 2,3, 14,11,'#6a5028',s);
+  PX(c,o,t, 2,4, 14,1,'#3a2818',s);
+  PX(c,o,t, 2,7, 14,1,'#3a2818',s);
+  PX(c,o,t, 2,10,14,1,'#3a2818',s);
+  PX(c,o,t, 2,13,14,1,'#3a2818',s);
+  PX(c,o,t, 5,0, 8,4,'#4a3818',s);
+  PX(c,o,t, 6,1, 6,2,'#6a5028',s);
+  PX(c,o,t, 4,1, 3,3,'#1a1010',s);
+  PX(c,o,t,11,1, 3,3,'#1a1010',s);
+  PX(c,o,t, 4,1, 1,1,'#e0a020',s);
+  PX(c,o,t,11,1, 1,1,'#e0a020',s);
+  PX(c,o,t,-1,6, 3,1,'#3a2818',s);
+  PX(c,o,t,16,6, 3,1,'#3a2818',s);
+  PX(c,o,t,-2,9, 4,1,'#3a2818',s);
+  PX(c,o,t,16,9, 4,1,'#3a2818',s);
+  PX(c,o,t,-15,11, 16,2,'#3a2818',s);
+  PX(c,o,t,16,11, 16,2,'#3a2818',s);
+  for(let i=0;i<6;i++){
+    PX(c,o,t,-13+i*2,13, 1,2,'#3a2818',s);
+    PX(c,o,t,17+i*2,13, 1,2,'#3a2818',s);
+  }
+  PX(c,o,t,-17,10, 4,4,'#1a0808',s);
+  PX(c,o,t,30,10, 4,4,'#1a0808',s);
+  c.fillStyle='rgba(200,230,255,0.6)';
+  c.beginPath();c.arc(o+9*s,t+17*s,1.5*s,0,Math.PI*2);c.fill();
+  c.beginPath();c.arc(o+12*s,t+19*s,1*s,0,Math.PI*2);c.fill();
+  c.restore();
+}
+
+// ─── DIVING BEETLE ───
+function spDiver(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-12*s;
+  PX(c,o,t,-1,14, 4,1,'#0a0a0a',s); PX(c,o,t,-2,17, 5,1,'#0a0a0a',s); PX(c,o,t,-1,20, 4,1,'#0a0a0a',s);
+  PX(c,o,t,21,14, 4,1,'#0a0a0a',s); PX(c,o,t,21,17, 5,1,'#0a0a0a',s); PX(c,o,t,21,20, 4,1,'#0a0a0a',s);
+  PX(c,o,t, 2,5, 20,17,'#1a2818',s);
+  PX(c,o,t, 1,7, 22,13,'#2a3818',s);
+  PX(c,o,t, 3,6, 18,15,'#384828',s);
+  PX(c,o,t, 4,7, 16,13,'#485828',s);
+  PX(c,o,t, 1,5, 22,2,'#e8a020',s);
+  PX(c,o,t, 1,5, 2,16,'#e8a020',s);
+  PX(c,o,t,21,5, 2,16,'#e8a020',s);
+  PX(c,o,t, 1,19, 22,2,'#e8a020',s);
+  PX(c,o,t, 1,5, 22,1,'#f8c040',s);
+  PX(c,o,t,11,5, 2,16,'#1a2818',s);
+  PX(c,o,t, 5,3, 14,4,'#384828',s);
+  PX(c,o,t, 5,2, 14,1,'#e8a020',s);
+  PX(c,o,t, 5,3, 1,4,'#e8a020',s);
+  PX(c,o,t,18,3, 1,4,'#e8a020',s);
+  PX(c,o,t, 8,0, 8,3,'#1a2818',s);
+  PX(c,o,t, 9,1, 6,1,'#384828',s);
+  PX(c,o,t, 7,1, 2,2,'#181010',s);
+  PX(c,o,t,15,1, 2,2,'#181010',s);
+  PX(c,o,t, 8,-2, 1,2,'#1a2818',s);
+  PX(c,o,t,15,-2, 1,2,'#1a2818',s);
+  c.restore();
+}
+
+// ─── MAYFLY ───
+function spMayfly(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-7*s,t=cy-15*s;
+  c.fillStyle='rgba(220,230,255,0.55)';
+  c.fillRect(Math.round(o-5*s),Math.round(t-2*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(14*s)));
+  c.fillRect(Math.round(o+11*s),Math.round(t-2*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(14*s)));
+  c.fillStyle='rgba(200,210,235,0.5)';
+  c.fillRect(Math.round(o-4*s),Math.round(t+8*s),Math.max(1,Math.round(7*s)),Math.max(1,Math.round(8*s)));
+  c.fillRect(Math.round(o+11*s),Math.round(t+8*s),Math.max(1,Math.round(7*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='rgba(120,140,200,0.6)';
+  for(let i=0;i<4;i++){
+    c.fillRect(Math.round(o-4*s+i*2*s),Math.round(t-2*s),Math.max(1,Math.round(s*0.6)),Math.max(1,Math.round(14*s)));
+    c.fillRect(Math.round(o+12*s+i*2*s),Math.round(t-2*s),Math.max(1,Math.round(s*0.6)),Math.max(1,Math.round(14*s)));
+  }
+  PX(c,o,t, 4,4, 6,16,'#9a7050',s);
+  PX(c,o,t, 5,5, 4,14,'#c89070',s);
+  PX(c,o,t, 5,5, 4,2,'#a08060',s);
+  PX(c,o,t, 4,8, 6,1,'#7a5030',s);
+  PX(c,o,t, 4,12,6,1,'#7a5030',s);
+  PX(c,o,t, 4,16,6,1,'#7a5030',s);
+  PX(c,o,t, 4,1, 6,4,'#a08060',s);
+  PX(c,o,t, 5,2, 4,2,'#c89070',s);
+  PX(c,o,t, 3,1, 3,3,'#1a1010',s);
+  PX(c,o,t, 8,1, 3,3,'#1a1010',s);
+  PX(c,o,t, 4,1, 1,1,'#fff',s);
+  PX(c,o,t, 9,1, 1,1,'#fff',s);
+  PX(c,o,t, 4,20, 1,5,'#7a5030',s);
+  PX(c,o,t, 7,20, 1,7,'#7a5030',s);
+  PX(c,o,t,10,20, 1,5,'#7a5030',s);
+  PX(c,o,t, 5,-1, 1,2,'#1a1010',s);
+  PX(c,o,t, 9,-1, 1,2,'#1a1010',s);
+  PX(c,o,t, 1,7, 3,1,'#7a5030',s);
+  PX(c,o,t,11,7, 3,1,'#7a5030',s);
+  PX(c,o,t, 1,11,3,1,'#7a5030',s);
+  PX(c,o,t,11,11,3,1,'#7a5030',s);
+  c.restore();
+}
+
+// ─── PILLBUG ───
+function spPillbug(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-9*s;
+  PX(c,o,t, 3,3, 18,14,'#404048',s);
+  PX(c,o,t, 2,4, 20,12,'#505058',s);
+  PX(c,o,t, 4,3, 16,14,'#606068',s);
+  PX(c,o,t, 5,2, 14,15,'#707078',s);
+  for(let i=0;i<7;i++){
+    const px=4+i*2;
+    PX(c,o,t, px, 2, 1, 15, '#383840', s);
+  }
+  for(let i=0;i<7;i++){
+    const px=5+i*2;
+    PX(c,o,t, px, 3, 1, 2, '#90909a', s);
+  }
+  PX(c,o,t, 5,1, 4,3,'#606068',s);
+  PX(c,o,t, 6,1, 2,2,'#80808a',s);
+  PX(c,o,t,15,1, 4,3,'#606068',s);
+  PX(c,o,t,16,1, 2,2,'#80808a',s);
+  PX(c,o,t, 5,4, 1,1,'#1a1010',s);
+  PX(c,o,t,18,4, 1,1,'#1a1010',s);
+  PX(c,o,t, 6,0, 1,1,'#404048',s);
+  PX(c,o,t,17,0, 1,1,'#404048',s);
+  for(let i=0;i<7;i++){
+    PX(c,o,t, 4+i*2, 17, 1,1, '#383840', s);
+  }
+  c.restore();
+}
+
+SFN.stinkbug = spStinkbug;
+SFN.worm = spWorm;
+SFN.boatman = spBoatman;
+SFN.diver = spDiver;
+SFN.mayfly = spMayfly;
+SFN.pillbug = spPillbug;
+
+// ═══════════════════════════════════════════════
+// DRAW TRAINER AT BATTLE SCALE
+// ═══════════════════════════════════════════════
+function drawTrainerBattleSprite(ctx, x, y, sprite){
+  ctx.save();
+  ctx.fillStyle='rgba(0,0,0,0.18)';
+  ctx.fillRect(Math.round(x-18),Math.round(y+22),36,6);
+  let pants='#2a4060', shirt='#3070b0', hair='#1a1010', hat=null;
+  if(sprite==='kid'){pants='#3a5828'; shirt='#80b840'; hair='#7a4818'; hat=null;}
+  else if(sprite==='hiker'){pants='#605040'; shirt='#a05828'; hair='#3a2010'; hat='#a05828';}
+  else if(sprite==='angler'){pants='#286050'; shirt='#5090a0'; hair='#1a1010'; hat='#503028';}
+  else if(sprite==='scout'){pants='#604010'; shirt='#c0a040'; hair='#a06030'; hat='#604010';}
+  else if(sprite==='rival'){pants='#202020'; shirt='#4040a0'; hair='#3a1810'; hat=null;}
+  // Legs (longer)
+  ctx.fillStyle=pants;
+  ctx.fillRect(Math.round(x-9),  Math.round(y+5),  10, 22);
+  ctx.fillRect(Math.round(x+1),  Math.round(y+5),  10, 22);
+  // Shoes
+  ctx.fillStyle='#111';
+  ctx.fillRect(Math.round(x-12), Math.round(y+24), 13, 6);
+  ctx.fillRect(Math.round(x+1),  Math.round(y+24), 13, 6);
+  // Body
+  ctx.fillStyle=shirt;
+  ctx.fillRect(Math.round(x-15), Math.round(y-30), 30, 36);
+  ctx.fillStyle='rgba(0,0,0,0.2)';
+  ctx.fillRect(Math.round(x-15), Math.round(y-30), 30, 5);
+  // Arms
+  ctx.fillStyle=shirt;
+  ctx.fillRect(Math.round(x-22), Math.round(y-26), 9, 22);
+  ctx.fillRect(Math.round(x+13), Math.round(y-26), 9, 22);
+  // Hands
+  ctx.fillStyle='#f8c88a';
+  ctx.fillRect(Math.round(x-22), Math.round(y-6),  9, 6);
+  ctx.fillRect(Math.round(x+13), Math.round(y-6),  9, 6);
+  // Head
+  ctx.fillStyle='#f8c88a';
+  ctx.fillRect(Math.round(x-13), Math.round(y-54), 26, 26);
+  ctx.fillStyle='#e8b87a';
+  ctx.fillRect(Math.round(x-15), Math.round(y-50), 5, 12);
+  ctx.fillRect(Math.round(x+10), Math.round(y-50), 5, 12);
+  // Eyes (facing left toward player)
+  ctx.fillStyle='#1a1010';
+  ctx.fillRect(Math.round(x-10), Math.round(y-44), 5, 5);
+  ctx.fillRect(Math.round(x+1),  Math.round(y-44), 5, 5);
+  // Mouth
+  ctx.fillRect(Math.round(x-5),  Math.round(y-32), 10, 2);
+  // Hair on top
+  ctx.fillStyle=hair;
+  ctx.fillRect(Math.round(x-13), Math.round(y-60), 26, 14);
+  ctx.fillRect(Math.round(x-15), Math.round(y-55), 5, 12);
+  ctx.fillRect(Math.round(x+10), Math.round(y-55), 5, 12);
+  // Hat
+  if(hat){
+    ctx.fillStyle=hat;
+    ctx.fillRect(Math.round(x-16), Math.round(y-66), 32, 14);
+    ctx.fillRect(Math.round(x-18), Math.round(y-62), 36, 7);
+    ctx.fillStyle='rgba(255,255,255,0.25)';
+    ctx.fillRect(Math.round(x-6),  Math.round(y-66), 10, 4);
+  }
+  if(sprite==='rival'){
+    ctx.fillStyle=hair;
+    ctx.fillRect(Math.round(x-13), Math.round(y-66), 8, 10);
+    ctx.fillRect(Math.round(x-2),  Math.round(y-68), 8, 12);
+    ctx.fillRect(Math.round(x+6),  Math.round(y-66), 8, 10);
+  }
+  ctx.restore();
+}
+
 </script>
 </body>
 </html>
