@@ -191,6 +191,7 @@ const G={
   currentSlot:null,
   saveName:null,
   loadout:[], // array of instance objects {id, nickname, level, xp, hp, maxHp}
+  storage:[], // extra caught bugs kept in the field station aquarium holder
   seen: new Set(), // species ids ever caught (for Bugdex)
   // zone: 1|2|3|'pc'  (pc = pokemon center interior)
   zone:1, unlockedZones:new Set([1]),
@@ -236,6 +237,7 @@ const G={
   pendingItemReward:null, // {name, desc} for item reward screen
   bugdexScroll:0,
   loadoutScroll:0,
+  holder:{partyIndex:0,partyScroll:0,storageScroll:0,msg:''},
 };
 
 // ═══════════════════════════════════════════════
@@ -357,6 +359,14 @@ function buildBattleParty(){
 function hasBattleReadyBug(){
   return G.loadout.slice(0, 6).some(inst => inst.hp > 0);
 }
+function addBugToCollection(inst){
+  if(G.loadout.length<6){
+    G.loadout.push(inst);
+    return 'party';
+  }
+  G.storage.push(inst);
+  return 'storage';
+}
 function saveBattleHP(){
   // Write battle-bug HP back to its owned instance
   G.battleParty.forEach(b => {
@@ -460,7 +470,7 @@ function normalizeSavedLoadout(saved){
 }
 
 function resetAllMaps(){
-  [1,2,3,'pc'].forEach(z => resetMap(z));
+  [1,2,3,'high','pc'].forEach(z => resetMap(z));
 }
 
 function getSaveData(){
@@ -470,7 +480,8 @@ function getSaveData(){
     saveName:     G.saveName || 'Trainer',
     savedAt:      new Date().toLocaleString(),
     loadout:      clonePlain(G.loadout, []),
-    seen:         [...G.seen],
+    storage:      clonePlain(G.storage, []),
+    seen:         [...new Set([...G.seen, ...G.loadout.map(inst=>inst.id), ...G.storage.map(inst=>inst.id)])],
     zone:         G.zone,
     prevZone:     G.prevZone || 1,
     unlockedZones:[...G.unlockedZones],
@@ -512,7 +523,9 @@ function loadFromSlot(n){
     G.saveName     = d.saveName || `Slot ${n+1}`;
     _uidCounter    = Math.max(0, Number(d._uid) || 0);
     G.loadout      = normalizeSavedLoadout(d.loadout || []);
-    G.seen         = new Set([...(d.seen || []), ...G.loadout.map(inst => inst.id)]);
+    G.storage      = normalizeSavedLoadout(d.storage || []);
+    if(!d.storage && G.loadout.length>6) G.storage = G.loadout.splice(6);
+    G.seen         = new Set([...(d.seen || []), ...G.loadout.map(inst => inst.id), ...G.storage.map(inst => inst.id)]);
     G.zone         = d.zone || 1;
     G.prevZone     = d.prevZone || (typeof G.zone==='number' ? G.zone : 1);
     G.unlockedZones= new Set(d.unlockedZones || [1]);
@@ -537,6 +550,7 @@ function loadFromSlot(n){
     G.pig.searching = false; G.pig.timer = 0; G.pig.result = null;
     G.bugdexScroll = d.bugdexScroll || 0;
     G.loadoutScroll = d.loadoutScroll || 0;
+    G.holder = {partyIndex:0,partyScroll:0,storageScroll:0,msg:''};
     G.keys = {};
     G.battle = null; G.battleParty = [];
     G.battleMsg = ''; G.battlePhase = 'action'; G.pendingAction = null;
@@ -1069,7 +1083,7 @@ function drawTypeBadge(x,y,t){
 // Tile codes: 0=floor 1=grass 2=wall/tree 3=unused
 // 4=path 5=PCbuilding(solid) 6=portal 7=pond 9=shrooms
 // 11=PCdoor(enter) 12=PCexit 13=PCdesk 14=PCfloor 15=PCcounter
-// 21=treetop 22=sky bridge 23=dream bed 24=lab bed 25=open sky
+// 21=treetop 22=sky bridge 23=dream bed 24=lab bed 25=open sky 26=aquarium 27=flowery treetop encounter
 // ═══════════════════════════════════════════════
 const TW=16,TALL=27,WIDE=30;
 const MAPS={};
@@ -1093,6 +1107,10 @@ function buildMap(z){
     for(let cy=4;cy<=10;cy++) for(let cx=11;cx<=18;cx++) m[cy][cx]=5;
     // Path from row 12 down to south border
     for(let y=12;y<TALL-2;y++){m[y][14]=4;m[y][15]=4;}
+    // Safe walking lanes around the field so grass can always be avoided.
+    for(let x=2;x<WIDE-2;x++){m[13][x]=4;m[23][x]=4;}
+    for(let x=7;x<=15;x++)m[19][x]=4;
+    for(let x=15;x<=22;x++)m[21][x]=4;
     // Door at row 11
     m[11][14]=11;m[11][15]=11;
     // South zone portal
@@ -1102,6 +1120,11 @@ function buildMap(z){
     [[3,3,8,6],[16,3,11,5],[2,12,10,8],[18,11,9,9],[8,7,14,8]].forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=7;
     });
+    // Dry boardwalks make every exit reachable without stepping into water.
+    for(let y=1;y<TALL-1;y++){m[y][14]=4;m[y][15]=4;}
+    for(let x=1;x<WIDE-1;x++){m[10][x]=4;m[21][x]=4;}
+    for(let x=7;x<=15;x++)m[17][x]=4;
+    for(let x=15;x<=22;x++)m[7][x]=4;
     [[1,1,2,4],[27,1,2,4],[1,20,2,5],[27,20,2,5]].forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=2;
     });
@@ -1113,21 +1136,29 @@ function buildMap(z){
     [[2,2,12,8],[15,2,12,8],[2,14,12,8],[15,14,12,7],[7,8,16,8]].forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=9;
     });
+    // Clear mushroom-free trails through the hollow.
+    for(let y=1;y<TALL-1;y++){m[y][14]=4;m[y][15]=4;}
+    for(let x=1;x<WIDE-1;x++){m[11][x]=4;m[22][x]=4;}
+    for(let x=5;x<=15;x++)m[12][x]=4;
+    m[17][14]=4;
     [[1,1,2,5],[26,1,2,5],[1,20,2,5],[26,20,2,5]].forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=2;
     });
     m[1][14]=6;m[1][15]=6;
   } else if(z==='high'){
     for(let y=0;y<TALL;y++)for(let x=0;x<WIDE;x++)m[y][x]=25;
-    const crowns=[[3,16,7,5],[12,12,7,5],[21,15,6,5],[6,7,6,4],[17,6,7,4]];
+    const crowns=[[2,15,9,6],[11,11,9,6],[20,14,8,6],[5,6,8,5],[16,5,9,5]];
     crowns.forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=21;
     });
-    [[9,17,13],[18,14,21],[11,9,17]].forEach(([x1,y,x2])=>{
-      for(let x=x1;x<=x2;x++)m[y][x]=22;
+    [[10,17,20],[18,14,24],[9,9,19]].forEach(([x1,y,x2])=>{
+      for(let x=x1;x<=x2;x++){m[y][x]=22;m[y+1][x]=22;}
     });
-    for(let y=10;y<22;y+=3){m[y][5]=22;m[y][6]=22;}
-    m[15][24]=23;
+    for(let y=10;y<22;y++){m[y][5]=22;m[y][6]=22;}
+    [[3,16,3,3],[7,18,3,2],[13,12,5,2],[21,15,4,3],[18,6,5,2],[7,7,4,2]].forEach(([sx,sy,w,h])=>{
+      for(let y=sy;y<sy+h;y++)for(let x=sx;x<sx+w;x++)if(m[y][x]===21)m[y][x]=27;
+    });
+    m[16][23]=23;m[16][24]=23;
   } else if(z==='pc'){
     // ── Pokemon Center Interior ──
     // 14 wide x 12 tall room, centered
@@ -1159,6 +1190,8 @@ function buildMap(z){
     for(let x=OX+4;x<=OX+W2-5;x++)m[deskRow+1][x]=13;
     // Dr. Marshall keeps one ordinary lab bed here. It is only for waking up.
     m[OY+H2-3][OX+2]=24;m[OY+H2-3][OX+3]=24;
+    // Aquarium bug holder on the right wall.
+    m[OY+5][OX+W2-3]=26;m[OY+6][OX+W2-3]=26;
   }
   return m;
 }
@@ -1169,8 +1202,8 @@ function gt(z,tx,ty){
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25;}
-function isEncounter(t){return t===1||t===7||t===9||t===21;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26;}
+function isEncounter(t){return t===1||t===7||t===9||t===27;}
 function isWater(t){return t===7;}
 
 // ═══════════════════════════════════════════════
@@ -1285,10 +1318,9 @@ function drawTile(tile,sx,sy,tx,ty){
       break;}
     case 21: { // saturated cloud-treetop encounter tile
       X.fillStyle='#72f0ff';X.fillRect(sx,sy,TW,TW);
-      X.fillStyle='#30e068';X.fillRect(sx,sy+5,TW,11);
-      X.fillStyle='#ffe040';X.fillRect(sx+1,sy+2,14,5);
-      X.fillStyle='#ff4bd8';X.fillRect(sx+2,sy+7,12,4);
-      X.fillStyle='#ffffff';X.fillRect(sx+3,sy+1,10,3);
+      X.fillStyle='#18a838';X.fillRect(sx,sy+5,TW,11);
+      X.fillStyle='#24d850';X.fillRect(sx+1,sy+2,14,8);
+      X.fillStyle='#52f070';X.fillRect(sx+3,sy+1,10,5);
       X.fillStyle='rgba(0,80,120,0.25)';X.fillRect(sx,sy+14,TW,2);
       break;}
     case 22: { // rope bridge between crowns
@@ -1298,20 +1330,42 @@ function drawTile(tile,sx,sy,tx,ty){
       X.fillStyle='#ffe070';X.fillRect(sx+2,sy+7,3,7);X.fillRect(sx+10,sy+7,3,7);
       break;}
     case 23: { // treetop bed back down to the lab
-      X.fillStyle='#30e068';X.fillRect(sx,sy,TW,TW);
-      X.fillStyle='#7840e8';X.fillRect(sx+1,sy+7,14,7);
-      X.fillStyle='#ff70d8';X.fillRect(sx+3,sy+4,10,4);
-      X.fillStyle='#fff8b0';X.fillRect(sx+2,sy+11,12,3);
+      X.fillStyle='#24d850';X.fillRect(sx,sy,TW,TW);
+      const left=gt(G.zone,tx-1,ty)===23,right=gt(G.zone,tx+1,ty)===23;
+      X.fillStyle='#8a48ff';X.fillRect(sx+(left?0:2),sy+5,right?16:14,9);
+      X.fillStyle='#ff80dc';X.fillRect(sx+(left?0:3),sy+3,right?14:10,5);
+      X.fillStyle='#fff8b0';X.fillRect(sx+(left?0:2),sy+10,right?16:13,3);
+      X.fillStyle='#4c2078';X.fillRect(sx+(left?0:1),sy+13,right?15:14,2);
       break;}
     case 24: { // field lab bed
       X.fillStyle='#e4e4e0';X.fillRect(sx,sy,TW,TW);
-      X.fillStyle='#6090d0';X.fillRect(sx+1,sy+6,14,8);
-      X.fillStyle='#f8f8f0';X.fillRect(sx+2,sy+3,7,5);
-      X.fillStyle='#405080';X.fillRect(sx+1,sy+13,14,2);
+      const left=gt(G.zone,tx-1,ty)===24,right=gt(G.zone,tx+1,ty)===24;
+      X.fillStyle='#405080';X.fillRect(sx+(left?0:1),sy+12,right?16:15,3);
+      X.fillStyle='#6090d0';X.fillRect(sx+(left?0:1),sy+6,right?16:14,7);
+      X.fillStyle='#f8f8f0';X.fillRect(sx+(left?0:2),sy+3,right?12:8,5);
+      X.fillStyle='#90b8e8';X.fillRect(sx+(left?0:2),sy+8,right?14:12,3);
+      break;}
+    case 26: { // aquarium bug holder
+      X.fillStyle='#e4e4e0';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#205890';X.fillRect(sx+1,sy+2,14,11);
+      X.fillStyle='#68c8ff';X.fillRect(sx+2,sy+3,12,9);
+      X.fillStyle='rgba(255,255,255,0.55)';X.fillRect(sx+3,sy+4,8,2);
+      X.fillStyle='#184060';X.fillRect(sx+1,sy+13,14,2);
+      X.fillStyle='#ffb840';X.fillRect(sx+5,sy+8,4,2);X.fillRect(sx+9,sy+7,2,3);
       break;}
     case 25: { // open sky void in high zone
       X.fillStyle='#6ee8ff';X.fillRect(sx,sy,TW,TW);
       X.fillStyle='rgba(255,255,255,0.25)';X.fillRect(sx+((tx+ty)%4),sy+4,10,2);
+      break;}
+    case 27: { // flowery treetop encounter patch
+      X.fillStyle='#22c848';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#48f068';X.fillRect(sx+1,sy+4,14,10);
+      const cols=['#ff3bd8','#fff050','#ff7030','#7b50ff'];
+      for(let i=0;i<5;i++){
+        X.fillStyle=cols[(tx+ty+i)%cols.length];
+        X.fillRect(sx+2+(i*3)%12,sy+2+((i*5+tx)%9),3,3);
+      }
+      X.fillStyle='rgba(0,80,120,0.25)';X.fillRect(sx,sy+14,TW,2);
       break;}
     case 9: // mushroom field
       X.fillStyle='#301828';X.fillRect(sx,sy,TW,TW);
@@ -1742,6 +1796,15 @@ function drawWorld(){
     }
   }
 
+  if(G.zone==='high'){
+    [[6,12],[15,9],[24,12],[9,3],[20,2]].forEach(([tx,top])=>{
+      const sx=tx*TW-camX,sy=top*TW-camY;
+      X.fillStyle='#8a4a20';X.fillRect(sx-12,sy+40,24,520);
+      X.fillStyle='#c07028';X.fillRect(sx-4,sy+40,7,520);
+      X.fillStyle='rgba(80,30,10,0.28)';X.fillRect(sx+8,sy+40,8,520);
+    });
+  }
+
   // Tiles
   for(let ty=0;ty<TALL;ty++)for(let tx=0;tx<WIDE;tx++){
     const tile=map[ty][tx];
@@ -1773,6 +1836,8 @@ function drawWorld(){
   if(G.zone==='pc'){
     const nearExit=pty>=18&&Math.abs(ptx-15)<=2;
     if(nearExit){panel(160,390,316,28);T('Walk south to exit',318,404,6,'#303848','right');}
+    const nearHolder=ptx>=20&&ptx<=22&&pty>=10&&pty<=13;
+    if(nearHolder){panel(154,390,322,28);T('Press Z at the aquarium',318,404,6,'#303848','right');}
   }
 
   // PC message
@@ -2768,6 +2833,7 @@ function doZAction(allowRake=true){
   if(ftile===11)enterPC();
   if(ftile===12)exitPC();
   if(ftile===13)tryTalkDesk();
+  if(ftile===26){openBugHolder();return;}
   if(interactWithFacingNPC())return;
 }
 function interactWithFacingNPC(){
@@ -2836,10 +2902,14 @@ function confirmName(skip=false){
   const nick = skip ? null : (G.nameStr.trim() || null);
   const level = tgt.capturedLevel || 1;
   const inst = newCaughtInstance(tgt.id, level, {nickname: nick, hp: tgt.capturedHp});
-  G.loadout.push(inst);
+  const dest=addBugToCollection(inst);
   G.seen.add(tgt.id);
   G.naming = false; G.nameTarget = null; G.nameStr = '';
   G.screen = 'world';
+  if(dest==='storage'){
+    G.pcMsg=`${BUGS[tgt.id].name}\nwent to the field\nstation aquarium.`;
+    G.pcMsgTimer=220;
+  }
   checkUnlocks();
 }
 
@@ -3079,6 +3149,90 @@ function moveLoadout(i,dir){
   G.loadout[i]=G.loadout[j];
   G.loadout[j]=tmp;
 }
+function openBugHolder(){
+  G.holder=G.holder||{partyIndex:0,partyScroll:0,storageScroll:0,msg:''};
+  G.holder.partyIndex=Math.max(0,Math.min(G.holder.partyIndex||0,Math.max(0,G.loadout.length-1)));
+  G.screen='bug_holder';
+  sfx('menu');
+}
+function bugLine(inst){
+  const b=BUGS[inst.id],ns=levelStats(inst.id,inst.level);
+  return {
+    name:inst.nickname||b.name,
+    type:b.type,
+    stats:`Lv.${inst.level} HP ${inst.hp}/${ns.hp} ATK ${ns.atk} DEF ${ns.def} SPD ${ns.spd}`,
+    xp:`XP ${inst.xp}/${xpForLevel(inst.level)}`
+  };
+}
+function drawBugHolderRow(inst,x,y,w,sel,actions){
+  X.fillStyle=sel?'#d8f8ff':'#e8e4d8';X.fillRect(x,y,w,54);
+  X.strokeStyle=sel?'#2088d0':'#607040';X.lineWidth=2;X.strokeRect(x,y,w,54);
+  drawBug(X,inst.id,x+27,y+29,1.15);
+  const info=bugLine(inst);
+  T(info.name,x+54,y+16,6,'#303848');
+  drawTypeBadge(x+54,y+22,info.type);
+  T(info.stats,x+104,y+31,4,'#506070');
+  T(info.xp,x+104,y+44,4,'#708090');
+  if(actions)actions.forEach((a,i)=>BTN(x+w-52,y+6+i*23,46,19,a.label,a.action));
+}
+function holderStoreParty(idx){
+  if(G.loadout.length<=1){G.holder.msg='Keep at least one bug with you.';return;}
+  const inst=G.loadout.splice(idx,1)[0];
+  G.storage.push(inst);
+  G.holder.partyIndex=Math.max(0,Math.min(idx,G.loadout.length-1));
+  G.holder.msg=(inst.nickname||BUGS[inst.id].name)+' stored.';
+  saveBattleHP();
+}
+function holderTakeStorage(idx){
+  const inst=G.storage[idx];
+  if(!inst)return;
+  if(G.loadout.length<6){
+    G.storage.splice(idx,1);
+    G.loadout.push(inst);
+    G.holder.partyIndex=G.loadout.length-1;
+    G.holder.msg=(inst.nickname||BUGS[inst.id].name)+' joined you.';
+  } else {
+    const pi=Math.max(0,Math.min(G.holder.partyIndex||0,G.loadout.length-1));
+    G.storage[idx]=G.loadout[pi];
+    G.loadout[pi]=inst;
+    G.holder.msg='Swapped with slot '+(pi+1)+'.';
+  }
+  saveBattleHP();
+}
+function drawBugHolder(){
+  X.fillStyle='#102840';X.fillRect(0,0,480,432);
+  for(let i=0;i<12;i++){X.fillStyle=`rgba(${60+i*10},${160+i*6},255,0.20)`;X.fillRect((i*53+G.tick)%480,44+i*28,80,12);}
+  panel(8,8,464,36,'#f8f8e8');
+  T('FIELD STATION AQUARIUM',240,31,8,'#205890','center');
+  panel(8,52,226,332,'#f8f8e8');panel(246,52,226,332,'#f8f8e8');
+  T('WITH YOU',121,75,7,'#303848','center');
+  T('HOLDER',359,75,7,'#303848','center');
+  const rowH=60,top=88;
+  const h=G.holder=G.holder||{partyIndex:0,partyScroll:0,storageScroll:0,msg:''};
+  h.partyIndex=Math.max(0,Math.min(h.partyIndex||0,Math.max(0,G.loadout.length-1)));
+  G.loadout.forEach((inst,i)=>{
+    const y=top+i*rowH-(h.partyScroll||0);
+    if(y<82||y>356)return;
+    drawBugHolderRow(inst,16,y,210,i===h.partyIndex,[
+      {label:'PICK',action:()=>{h.partyIndex=i;h.msg='Selected slot '+(i+1)+'.';}},
+      {label:'STORE',action:()=>holderStoreParty(i)}
+    ]);
+  });
+  G.storage.forEach((inst,i)=>{
+    const y=top+i*rowH-(h.storageScroll||0);
+    if(y<82||y>356)return;
+    drawBugHolderRow(inst,254,y,210,false,[
+      {label:G.loadout.length<6?'TAKE':'SWAP',action:()=>holderTakeStorage(i)}
+    ]);
+  });
+  if(!G.storage.length)T('Extra caught bugs\nwill wait here.',359,218,6,'#708090','center');
+  if(h.msg)T(h.msg,240,401,5,'#f8f8e8','center');
+  BTN(10,408,90,18,'BACK',()=>{G.screen='world';sfx('menu');});
+  BTN(116,408,70,18,'↑ TEAM',()=>h.partyScroll=Math.max(0,(h.partyScroll||0)-rowH));
+  BTN(190,408,70,18,'↓ TEAM',()=>h.partyScroll=(h.partyScroll||0)+rowH);
+  BTN(292,408,76,18,'↑ HOLD',()=>h.storageScroll=Math.max(0,(h.storageScroll||0)-rowH));
+  BTN(372,408,76,18,'↓ HOLD',()=>h.storageScroll=(h.storageScroll||0)+rowH);
+}
 
 // ═══════════════════════════════════════════════
 // TITLE
@@ -3160,11 +3314,11 @@ function drawReward(){
   if(tr){
     T('Gifted by '+tr.name+'.', 240, 340, 5, '#506070', 'center');
   }
-  T('Added to your loadout.', 240, 356, 5, '#506070', 'center');
+  T(G.loadout.length<6?'Added to your loadout.':'Sent to the field station aquarium.', 240, 356, 5, '#506070', 'center');
   BTN(160,370,160,30,'✓  NICE!',()=>{
     sfx('catch');
     const inst=newCaughtInstance(rid,lvl);
-    G.loadout.push(inst);
+    addBugToCollection(inst);
     G.seen.add(rid);
     if(G.battle&&G.battle.trainer) G.battle.trainer.npc.defeated=true;
     G.pendingReward=null;
@@ -3200,6 +3354,7 @@ function loop(){
     case 'menu':    drawMenu();   break;
     case 'bugdex':  drawBugdex(); break;
     case 'loadout': drawLoadout();break;
+    case 'bug_holder': drawBugHolder();break;
     case 'unlock':  drawUnlock(); break;
     case 'reward':  drawReward(); break;
     case 'gear':    drawGear();   break;
@@ -3345,6 +3500,7 @@ setupBtn('btn-b',()=>{
   if(G.screen==='battle'&&G.battlePhase==='move')G.battlePhase='action';
   if(G.screen==='battle'&&G.swapMode)G.swapMode=false;
   if(G.screen==='bugdex'||G.screen==='loadout'||G.screen==='bag')G.screen='menu';
+  if(G.screen==='bug_holder')G.screen='world';
   if(G.screen==='menu')G.screen='world';
   if(G.screen==='pig_feed')G.screen='world';
 });
@@ -3558,8 +3714,7 @@ function startMusicForScreen(){
 // BOATMAN TRADE
 // ═══════════════════════════════════════════════
 function countCaught(id){
-  // Count how many instances of this bug id are in loadout
-  return G.loadout.filter(inst=>inst.id===id).length;
+  return G.loadout.concat(G.storage||[]).filter(inst=>inst.id===id).length;
 }
 
 function talkToBoatman(npc){
@@ -3627,9 +3782,13 @@ function drawBoatmanTrade(){
 }
 
 function doBoatmanTrade(){
-  // Remove 3 waterbug instances from loadout
+  // Remove 3 waterbug instances from your party first, then the holder.
   let removed=0;
   G.loadout=G.loadout.filter(inst=>{
+    if(inst.id==='waterbug'&&removed<3){removed++;return false;}
+    return true;
+  });
+  G.storage=(G.storage||[]).filter(inst=>{
     if(inst.id==='waterbug'&&removed<3){removed++;return false;}
     return true;
   });
@@ -4411,7 +4570,7 @@ function drawBugdex(){
       X.fillStyle='#c4d8ec'; X.fillRect(6, ey+4, 56, ih-8);
       drawBug(X, id, 34, ey+ih/2, 1.3);
       const b = BUGS[id];
-      const owned = G.loadout.filter(inst => inst.id === id).length;
+      const owned = G.loadout.concat(G.storage||[]).filter(inst => inst.id === id).length;
       T(b.name, 72, ey+18, 7, '#303848');
       drawTypeBadge(72, ey+22, b.type);
       T('Base  HP:'+b.hp+'  ATK:'+b.atk+'  DEF:'+b.def+'  SPD:'+b.spd, 122, ey+40, 5, '#506070');
