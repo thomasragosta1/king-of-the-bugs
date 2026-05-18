@@ -186,6 +186,8 @@ PF.load().then(f=>{document.fonts.add(f);fontReady=true;}).catch(()=>fontReady=t
 // ═══════════════════════════════════════════════
 const G={
   screen:'title',
+  currentSlot:null,
+  saveName:null,
   loadout:[], // array of instance objects {id, nickname, level, xp, hp, maxHp}
   seen: new Set(), // species ids ever caught (for Bugdex)
   // zone: 1|2|3|'pc'  (pc = pokemon center interior)
@@ -196,6 +198,8 @@ const G={
   keys:{}, tick:0, moveDelay:0,
   battle:null, battleParty:[],
   battleMsg:'', battlePhase:'action', pendingAction:null,
+  battleTransition:{timer:0,duration:24,fromZone:1},
+  whiteout:{timer:0,duration:90},
   btFlashP:0, btFlashE:0, btTick:0, swapMode:false,
   prevScreen:'world',
   unlockMsg:'', hovered:null, buttons:[],
@@ -214,8 +218,10 @@ const G={
   boatmanTalked:false,
   boatmanTraded:false,
   // Reward screen
+  pendingReward:null, // trainer reward species id
   pendingItemReward:null, // {name, desc} for item reward screen
   bugdexScroll:0,
+  loadoutScroll:0,
 };
 
 // ═══════════════════════════════════════════════
@@ -234,7 +240,7 @@ const BUGS={
   slug:    {name:'GARDEN SLUG',   type:'MOLD',    hp:42,atk:11,def:15,spd:5, zone:3, moves:['Slime Trail','Ooze Burst','Acid Touch','Smother']},
   shroomfly:{name:'SHROOM FLY',   type:'MOLD',    hp:35,atk:14,def:8, spd:20,zone:3, moves:['Spore Cloud','Buzz Cut','Dart','Myco Bite']},
   fungus:  {name:'FUNGUS BEETLE', type:'MOLD',    hp:52,atk:16,def:14,spd:9, zone:3, moves:['Spore Slam','Fungus Bite','Cap Shield','Mold']},
-  mosquito:{name:'MOSQUITO LARVA',type:'AQUATIC', hp:30,atk:10,def:6, spd:22,zone:2, moves:['Needle Jab','Quick Dart','Bubble','Spin']},
+  mosquito:{name:'MOSQUITO LARVA',type:'AQUATIC', hp:30,atk:10,def:6, spd:22,zone:2, rakeOnly:true, moves:['Needle Jab','Quick Dart','Bubble','Spin']},
 };
 // ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
 const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
@@ -357,16 +363,100 @@ function getSlotInfo(n){
   } catch(e){ return null; }
 }
 
+const SAVE_VERSION = 2;
+const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0};
+
+function clonePlain(value, fallback){
+  if(value === undefined || value === null) return fallback;
+  try{ return JSON.parse(JSON.stringify(value)); }
+  catch(e){ return fallback; }
+}
+
+function npcSaveKey(npc){
+  return `${npc.zone}|${npc.tx}|${npc.ty}|${npc.name}`;
+}
+
+function getNPCSaveState(){
+  const out = {};
+  NPCS.forEach(npc => {
+    out[npcSaveKey(npc)] = {defeated: !!npc.defeated};
+  });
+  return out;
+}
+
+function applyNPCSaveState(saved){
+  NPCS.forEach(npc => { npc.defeated = false; });
+  if(!saved) return;
+
+  const byKey = Array.isArray(saved)
+    ? Object.fromEntries(saved.map(s => [s.key, s]))
+    : saved;
+
+  NPCS.forEach(npc => {
+    const state = byKey[npcSaveKey(npc)];
+    if(state) npc.defeated = !!state.defeated;
+  });
+}
+
+function normalizeSavedLoadout(saved){
+  if(!Array.isArray(saved)) return [];
+  const normalized = [];
+
+  saved.forEach(item => {
+    if(typeof item === 'string'){
+      if(BUGS[item]) normalized.push(newCaughtInstance(item, 1));
+      return;
+    }
+    if(!item || !BUGS[item.id]) return;
+
+    const level = Math.max(1, Number(item.level) || 1);
+    const ns = levelStats(item.id, level);
+    let uid = Number(item.uid) || 0;
+    if(uid <= 0) uid = ++_uidCounter;
+    _uidCounter = Math.max(_uidCounter, uid);
+
+    normalized.push({
+      uid,
+      id: item.id,
+      nickname: item.nickname || null,
+      level,
+      xp: Math.max(0, Number(item.xp) || 0),
+      hp: Math.max(0, Math.min(item.hp !== undefined ? Number(item.hp) : ns.hp, ns.hp)),
+      maxHp: ns.hp,
+    });
+  });
+
+  return normalized;
+}
+
+function resetAllMaps(){
+  [1,2,3,'pc'].forEach(z => resetMap(z));
+}
+
 function getSaveData(){
+  saveBattleHP();
   return {
+    version:      SAVE_VERSION,
     saveName:     G.saveName || 'Trainer',
     savedAt:      new Date().toLocaleString(),
-    loadout:      G.loadout,
+    loadout:      clonePlain(G.loadout, []),
     seen:         [...G.seen],
-    zone:         typeof G.zone==='number' ? G.zone : 1,
+    zone:         G.zone,
+    prevZone:     G.prevZone || 1,
     unlockedZones:[...G.unlockedZones],
-    player:       {x:G.player.x, y:G.player.y, dir:G.player.dir},
-    gear:         G.gear,
+    player:       {x:G.player.x, y:G.player.y, dir:G.player.dir, frame:G.player.frame||0},
+    gear:         clonePlain(G.gear, {}),
+    inventory:    {...DEFAULT_INVENTORY, ...clonePlain(G.inventory, {})},
+    rake:         {
+      anim: 0,
+      rakedTiles: clonePlain(G.rake && G.rake.rakedTiles, {}),
+      lastZone: G.rake ? G.rake.lastZone : null,
+    },
+    boatmanTalked: !!G.boatmanTalked,
+    boatmanTraded: !!G.boatmanTraded,
+    npcStates:    getNPCSaveState(),
+    bugdexScroll: G.bugdexScroll || 0,
+    loadoutScroll:G.loadoutScroll || 0,
     _uid:         _uidCounter,
   };
 }
@@ -389,19 +479,46 @@ function loadFromSlot(n){
     if(!d) return false;
     G.currentSlot  = n;
     G.saveName     = d.saveName || `Slot ${n+1}`;
-    G.loadout      = d.loadout  || [];
-    G.seen         = new Set(d.seen || []);
-    G.zone         = d.zone     || 1;
+    _uidCounter    = Math.max(0, Number(d._uid) || 0);
+    G.loadout      = normalizeSavedLoadout(d.loadout || []);
+    G.seen         = new Set([...(d.seen || []), ...G.loadout.map(inst => inst.id)]);
+    G.zone         = d.zone || 1;
+    G.prevZone     = d.prevZone || (typeof G.zone==='number' ? G.zone : 1);
     G.unlockedZones= new Set(d.unlockedZones || [1]);
     if(d.player){
-      G.player.x    = d.player.x   || 14*16;
-      G.player.y    = d.player.y   || 18*16;
-      G.player.dir  = d.player.dir || 2;
+      G.player.x    = d.player.x !== undefined ? d.player.x : 14*16;
+      G.player.y    = d.player.y !== undefined ? d.player.y : 18*16;
+      G.player.dir  = d.player.dir !== undefined ? d.player.dir : 2;
+      G.player.frame= d.player.frame !== undefined ? d.player.frame : 0;
       G.player.visX = G.player.x;
       G.player.visY = G.player.y;
     }
-    if(d.gear) G.gear = d.gear;
-    if(d._uid) _uidCounter = d._uid;
+    G.gear = d.gear ? {...G.gear, ...d.gear} : {hat:'cap', jacket:'red', pants:'jeans', tool:'backpack'};
+    G.inventory = {...DEFAULT_INVENTORY, ...(d.inventory || {})};
+    G.rake = {
+      anim: 0,
+      rakedTiles: clonePlain(d.rake && d.rake.rakedTiles, {}),
+      lastZone: d.rake ? d.rake.lastZone : null,
+    };
+    G.boatmanTalked = !!d.boatmanTalked;
+    G.boatmanTraded = !!d.boatmanTraded;
+    G.bugdexScroll = d.bugdexScroll || 0;
+    G.loadoutScroll = d.loadoutScroll || 0;
+    G.keys = {};
+    G.battle = null; G.battleParty = [];
+    G.battleMsg = ''; G.battlePhase = 'action'; G.pendingAction = null;
+    G.battleTransition = {timer:0,duration:24,fromZone:G.zone};
+    G.naming = false; G.nameTarget = null; G.nameStr = '';
+    G.pendingReward = null; G.pendingItemReward = null;
+    G.pcMsg = ''; G.pcMsgTimer = 0;
+    G.moveDelay = 0; G.prevScreen = 'world';
+    applyNPCSaveState(d.npcStates);
+    if(G.boatmanTraded){
+      const trader = NPCS.find(npc => npc.isTrader);
+      if(trader) trader.defeated = true;
+    }
+    resetAllMaps();
+    G.battleParty = buildBattleParty();
     return true;
   } catch(e){ console.warn('Load failed', e); return false; }
 }
@@ -472,7 +589,7 @@ function drawSaveScreen(){
       // Save name
       T(info.name, bx+54, by+28, 8, '#e8e0d0');
       // Zone name
-      const zn = {1:'Mossy Woods',2:'Murky Pond',3:'Mushroom Hollow'}[info.zone]||'Unknown';
+      const zn = {1:'Mossy Woods',2:'Murky Pond',3:'Mushroom Hollow',pc:'Field Lab'}[info.zone]||'Unknown';
       T(`Zone: ${zn}`, bx+54, by+48, 6, '#8098b0');
       // Bug count
       T(`Bugs: ${info.bugCount}`, bx+54, by+64, 6, '#8098b0');
@@ -951,7 +1068,7 @@ function buildMap(z){
     [[1,1,2,4],[27,1,2,4],[1,20,2,5],[27,20,2,5]].forEach(([sx,sy,w,h])=>{
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=2;
     });
-    // Boat tile — boatman sits here (walkable water tile, drawn as boat)
+    // Boat tile — boatman sits here; blocked so players talk from shore/water edge.
     m[12][15]=20; m[12][16]=20; // 2 tiles wide boat
     m[1][14]=6;m[1][15]=6;
     if(G.unlockedZones.has(3)){m[TALL-2][14]=6;m[TALL-2][15]=6;}
@@ -1002,7 +1119,7 @@ function gt(z,tx,ty){
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20;}
 function isEncounter(t){return t===1||t===7||t===9;}
 function isWater(t){return t===7;}
 
@@ -1102,15 +1219,18 @@ function drawTile(tile,sx,sy,tx,ty){
         X.fillRect(sx+1,sy+3,14,2);X.fillRect(sx+2,sy+7,12,2);X.fillRect(sx+1,sy+11,14,2);
       }
       break;}
-    case 20: { // boat tile
+    case 20: { // white boat tile
       X.fillStyle='#1848a8';X.fillRect(sx,sy,TW,TW);
       var bp=Math.sin(G.tick*.06+tx*.4)*1.2;
-      X.fillStyle='#8a5828';X.fillRect(sx+1,sy+8+bp,14,7);
-      X.fillStyle='#a06838';X.fillRect(sx+2,sy+7+bp,12,2);
-      X.fillStyle='#6a3810';X.fillRect(sx+2,sy+13+bp,12,2);
-      X.fillStyle='#8a5828';X.fillRect(sx,sy+9+bp,2,5);X.fillRect(sx+14,sy+9+bp,2,5);
-      X.fillStyle='#c8a060';X.fillRect(sx-2,sy+10+bp,6,1);
-      X.fillStyle='#a07840';X.fillRect(sx-4,sy+9+bp,3,3);
+      const hasLeft=gt(G.zone,tx-1,ty)===20;
+      const hasRight=gt(G.zone,tx+1,ty)===20;
+      X.fillStyle='rgba(80,160,255,0.35)';X.fillRect(sx+1,sy+4+bp,14,2);X.fillRect(sx+3,sy+11+bp,10,2);
+      X.fillStyle='#d8e8f0';X.fillRect(sx+(hasLeft?0:2),sy+8+bp,hasRight?16:14,6);
+      X.fillStyle='#f8f8f0';X.fillRect(sx+(hasLeft?0:3),sy+7+bp,hasRight?16:13,4);
+      X.fillStyle='#b8c8d0';X.fillRect(sx+(hasLeft?0:2),sy+13+bp,hasRight?15:13,2);
+      X.fillStyle='#78a0b8';X.fillRect(sx+(hasLeft?1:5),sy+9+bp,hasRight?12:10,2);
+      if(!hasLeft){X.fillStyle='#f8f8f0';X.fillRect(sx+1,sy+9+bp,3,4);}
+      if(!hasRight){X.fillStyle='#f8f8f0';X.fillRect(sx+12,sy+9+bp,3,4);}
       X.fillStyle='rgba(120,160,200,0.3)';X.fillRect(sx+2,sy+15+bp,12,3);
       break;}
     case 9: // mushroom field
@@ -1455,10 +1575,24 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',pc:'ENTOMOLOGY DEPT'};
 
+function snapPlayerToTile(){
+  const p=G.player;
+  p.x=Math.round(p.x/TW)*TW;
+  p.y=Math.round(p.y/TW)*TW;
+  p.visX=p.x;
+  p.visY=p.y;
+}
+
+function openMenuFromWorld(){
+  snapPlayerToTile();
+  G.moveDelay=0;
+  G.screen='menu';
+}
+
 function drawWorld(){
   const p=G.player,map=getMap(G.zone);
-  if(!p.visX) p.visX=p.x;
-  if(!p.visY) p.visY=p.y;
+  if(p.visX===undefined) p.visX=p.x;
+  if(p.visY===undefined) p.visY=p.y;
   const camX=p.visX-240+8,camY=p.visY-216+8;
 
   // Movement
@@ -1477,15 +1611,8 @@ function drawWorld(){
       const tx=Math.round(nx/TW),ty=Math.round(ny/TW);
       const tile=gt(G.zone,tx,ty);
       const npc=getNPCAt(G.zone,tx,ty);
-      if(npc && !npc.defeated){
-        // Bump into trainer NPC — auto-trigger battle
-        G.moveDelay=12;
-        triggerTrainerBattle(npc);
-      } else if(npc && npc.defeated){
-        // talked-to defeated NPC — show dialog
-        G.moveDelay=12;
-        G.pcMsg = `${npc.name}:\n${npc.afterMsg||"Good fight! Catch ya later."}`;
-        G.pcMsgTimer = 140;
+      if(npc){
+        G.moveDelay=8;
       } else if(walkable(tile)){
         p.x=nx;p.y=ny;
         // No moveDelay set on normal walk — next step triggers when visual arrives
@@ -1501,7 +1628,7 @@ function drawWorld(){
   }
 
   // Linear visual interpolation toward target tile — continuous motion when key held
-  const _spd = 3.2; // pixels per frame; 16px tile completes in ~5 frames
+  const _spd = 1.4; // pixels per frame; 16px tile completes in ~12 frames
   const _dx = p.x - p.visX, _dy = p.y - p.visY;
   if(Math.abs(_dx) > 0.4) p.visX += Math.sign(_dx) * Math.min(_spd, Math.abs(_dx));
   else p.visX = p.x;
@@ -1557,12 +1684,14 @@ function drawWorld(){
   // PC message
   if(G.pcMsgTimer>0){
     G.pcMsgTimer--;
-    panel(40,160,400,90,'#f8f8e8');
-    G.pcMsg.split('\n').forEach((l,i)=>T(l,60,190+i*22,7,'#303848'));
+    const msgLines=G.pcMsg.split('\n');
+    const msgH=Math.max(90,34+msgLines.length*22);
+    panel(40,160,400,msgH,'#f8f8e8');
+    msgLines.forEach((l,i)=>T(l,60,190+i*22,7,'#303848'));
   }
 
   drawWorldHUD();
-  BTN(348,4,128,26,'MENU',()=>G.screen='menu');
+  BTN(348,4,128,26,'MENU',openMenuFromWorld);
 
   // RAKE button — shown in zone 2 water tiles when player has rake
   if(G.zone===2&&G.inventory.lakeRake&&inWater){
@@ -1615,12 +1744,28 @@ function tryTalkDesk(){
   G.pcMsg = 'Dr. Marshall:\nAll your bugs have been\nfully restored!';
   G.pcMsgTimer = 180; // ~3 seconds — auto-dismisses
   sfx('heal');
+  autoSave();
+}
+
+function startBattleTransition(){
+  snapPlayerToTile();
+  G.battleTransition={timer:0,duration:24,fromZone:typeof G.zone==='number'?G.zone:(G.prevZone||1)};
+  G.screen='battle_transition';
+}
+
+function wildEncounterPool(zone){
+  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly);
+}
+
+function chooseWildEncounterId(zone){
+  const pool=wildEncounterPool(zone);
+  if(!pool.length)return null;
+  return pool[Math.floor(Math.random()*pool.length)];
 }
 
 function triggerEnc(){
-  const pool=Object.keys(BUGS).filter(id=>BUGS[id].zone===G.zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly);
-  const ids2=pool.length?pool:Object.keys(BUGS).filter(id=>BUGS[id].zone===G.zone&&!BUGS[id].trainerOnly);
-  const wid=ids2[Math.floor(Math.random()*ids2.length)];
+  const wid=chooseWildEncounterId(G.zone);
+  if(!wid)return;
   const zl=zoneLevel(G.zone);
   const wlvl=zl.min+Math.floor(Math.random()*(zl.max-zl.min+1));
   G.battle={wild:makeBug(wid,{isWild:true,level:wlvl}),trainer:null};
@@ -1629,7 +1774,7 @@ function triggerEnc(){
   G.battleMsg=`A wild Lv.${wlvl} ${BUGS[wid].name}\nappeared!`;
   G.battlePhase='action';G.pendingAction=null;
   G.btFlashP=0;G.btFlashE=0;G.btTick=0;G.swapMode=false;
-  G.screen='battle';
+  startBattleTransition();
   sfx('encounter');
 }
 
@@ -1665,6 +1810,96 @@ function drawWorldHUD(){
     T('FIELD LAB',10,418,6,'#2050a8');
     T('press A at desk to heal',10,426,4,'#607080');
   }
+}
+
+function drawBattleTransition(){
+  const tr=G.battleTransition||{timer:0,duration:24,fromZone:1};
+  const dur=tr.duration||24;
+  const t=Math.min(dur,tr.timer||0);
+  const p=t/dur;
+  const z=tr.fromZone||1;
+  const bg=BATZ[z]||BATZ[1];
+
+  X.fillStyle=bg.sky;X.fillRect(0,0,480,216);
+  X.fillStyle=bg.gnd;X.fillRect(0,216,480,216);
+
+  for(let i=0;i<10;i++){
+    const w=60+p*260;
+    const y=i*48-12;
+    X.fillStyle=i%2?'#101820':'#f8f8e8';
+    X.fillRect(480-w+(i%2?0:-p*80),y,w,18);
+    X.fillRect(0+(i%2?-p*80:0),y+24,w,18);
+  }
+
+  X.fillStyle=`rgba(255,255,255,${Math.sin(p*Math.PI)*0.55})`;
+  X.fillRect(0,0,480,432);
+
+  const pulse=Math.sin(p*Math.PI);
+  const scale=1.4+pulse*1.2;
+  if(G.battle&&G.battle.trainer){
+    const bob=Math.sin(p*Math.PI*2)*3;
+    drawTrainerBattleSprite(X,240,226+bob,G.battle.trainer.npc.sprite);
+    panel(114,282,252,28,'#f8f8e8');
+    T(G.battle.trainer.name,240,301,6,'#303848','center');
+  } else if(G.battle&&G.battle.wild) {
+    drawBug(X,G.battle.wild.id,240,214,scale);
+  }
+  T('BATTLE!',240,322,12,'#f8f8e8','center');
+
+  tr.timer=t+1;
+  G.battleTransition=tr;
+  if(tr.timer>dur){
+    G.screen='battle';
+    G.battleTransition={timer:0,duration:dur,fromZone:z};
+  }
+}
+
+function drawWhiteout(){
+  const wo=G.whiteout||{timer:0,duration:90};
+  const dur=wo.duration||90;
+  const t=wo.timer||0;
+  const p=Math.min(1,t/dur);
+  X.fillStyle='#f8f8f0';
+  X.fillRect(0,0,480,432);
+  const ring=1-p;
+  X.fillStyle=`rgba(255,255,255,${1-ring})`;
+  X.fillRect(0,0,480,432);
+  X.fillStyle=`rgba(48,56,72,${Math.min(1,p*1.6)})`;
+  T('Everything went white...',240,198,8,'#303848','center');
+  T('Dr. Marshall carried you back.',240,222,6,'#607080','center');
+  wo.timer=t+1;
+  G.whiteout=wo;
+  if(wo.timer>dur){
+    recoverAfterWhiteout();
+  }
+}
+
+function startWhiteout(){
+  snapPlayerToTile();
+  G.keys={};
+  G.whiteout={timer:0,duration:90};
+  G.screen='whiteout';
+  sfx('faint');
+}
+
+function recoverAfterWhiteout(){
+  G.loadout.forEach(inst=>{
+    inst.maxHp=levelStats(inst.id,inst.level).hp;
+    inst.hp=inst.maxHp;
+  });
+  G.battle=null;
+  G.battleParty=buildBattleParty();
+  G.battleMsg='';G.battlePhase='action';G.pendingAction=null;G.swapMode=false;
+  G.naming=false;G.nameTarget=null;G.nameStr='';
+  G.prevZone=1;
+  G.zone='pc'; resetMap('pc');
+  G.player.x=15*TW; G.player.y=18*TW; G.player.dir=0;
+  G.player.visX=G.player.x; G.player.visY=G.player.y;
+  G.moveDelay=20;
+  G.pcMsg='Dr. Marshall:\nYou fainted out there.\nI patched up your bugs.\nTake a breath before\nyou head back.';
+  G.pcMsgTimer=300;
+  G.screen='world';
+  autoSave();
 }
 
 // ═══════════════════════════════════════════════
@@ -1768,13 +2003,7 @@ function drawBattle(){
     const label = G.pendingReward ? 'CLAIM REWARD →' : 'CONTINUE →';
     BTN(220, 362, 256, 56, label, () => {
       sfx('menu');
-      if(G.pendingReward){
-        G.screen = 'reward';
-      } else {
-        if(G.battle && G.battle.trainer) G.battle.trainer.npc.defeated = true;
-        G.battlePhase = 'over';
-        G.battleMsg = (G.battle && G.battle.trainer ? G.battle.trainer.name : 'Trainer') + ' was defeated!';
-      }
+      openTrainerReward();
     });
     T('A = next', 14, 420, 5, '#909898');
   }
@@ -1892,6 +2121,14 @@ function drawSwapMenu(){
     X.textAlign='center';X.fillText('You must choose — no going back!',240,428);
   }
 }
+function chooseEnemyMove(bug){
+  const moves=(bug&&bug.moves)||[];
+  if(!moves.length) return null;
+  const damaging=moves.filter(m=>MOVES[m]&&MOVES[m].p>0);
+  const nonDamaging=moves.filter(m=>!MOVES[m]||!MOVES[m].p||MOVES[m].p<=0);
+  const pool=damaging.length&&(!nonDamaging.length||Math.random()<0.8)?damaging:(nonDamaging.length?nonDamaging:moves);
+  return pool[Math.floor(Math.random()*pool.length)];
+}
 function swapBug(idx){
   const bp=G.battleParty,t=bp.splice(idx,1)[0];
   bp.unshift(t);
@@ -1900,7 +2137,7 @@ function swapBug(idx){
   const wild=G.battle.wild;
   if(!wasForced && wild.hp>0){
     // Voluntary swap costs a turn — enemy attacks
-    const em=wild.moves[Math.floor(Math.random()*wild.moves.length)],emv=MOVES[em];
+    const em=chooseEnemyMove(wild),emv=MOVES[em];
     let emsg='';
     if(emv&&emv.p>0){
       if(Math.random()<emv.a){
@@ -1980,8 +2217,8 @@ function doMove(mv){
     }
   }
 
-  // Pick the enemy's move now (random) so we know its type & damage
-  const em = wild.moves[Math.floor(Math.random()*wild.moves.length)];
+  // Pick the enemy's move now, preferring damaging attacks most of the time.
+  const em = chooseEnemyMove(wild);
   const emv = MOVES[em];
 
   // ── Turn order by effective SPD (with the sb/db boosts factored in) ──
@@ -2062,7 +2299,9 @@ function afterResult(){
     return;
   }
   if(G.pendingAction==='lose'){
-    G.battlePhase='over';G.battleMsg=`${dn(G.battleParty[0])} fainted!\nHead to the Field Lab\nto heal up.`;
+    G.battlePhase='over';
+    G.battleMsg=`${dn(G.battleParty[0])} fainted!\nEverything went white...`;
+    G.pendingAction='whiteout';
     return;
   }
   if(G.pendingAction==='caught'){G.battlePhase='over';G.battleMsg='Bug added to Bugdex!';return;}
@@ -2080,10 +2319,12 @@ function awardXP(battleBug, amount){
     lvls++;
   }
   if(lvls > 0){
-    const oldMax = inst.maxHp;
+    const oldLevel = inst.level - lvls;
+    const oldMax = levelStats(inst.id, oldLevel).hp;
     const ns = levelStats(inst.id, inst.level);
     inst.maxHp = ns.hp;
-    inst.hp = Math.min(inst.maxHp, inst.hp + (inst.maxHp - oldMax));
+    const hpGain = Math.max(0, inst.maxHp - oldMax);
+    inst.hp = Math.min(inst.maxHp, inst.hp + hpGain);
     // Mirror to the live battle bug
     battleBug.level = inst.level;
     battleBug.maxHp = inst.maxHp;
@@ -2122,7 +2363,49 @@ function doRun(){
   if(G.battle.trainer){G.battleMsg=`You can't run\nfrom ${G.battle.trainer.name}!`;G.battlePhase='result';G.pendingAction='continue';return;}
   G.battlePhase='over';G.battleMsg='Got away safely!';sfx('menu');
 }
-function endBattle(){saveBattleHP();if(G.naming){G.screen='naming';return;}G.screen='world';autoSave();checkUnlocks();}
+function faceDirs(){return [[0,-1],[1,0],[0,1],[-1,0]];}
+function playerCanTalkToNPC(npc){
+  if(!npc)return false;
+  const p=G.player;
+  const ptx=Math.round(p.x/TW),pty=Math.round(p.y/TW);
+  const dirs=faceDirs();
+  const npcDir=npc.dir!==undefined?npc.dir:2;
+  const playerDir=p.dir!==undefined?p.dir:2;
+  const [fx,fy]=dirs[npcDir];
+  const frontX=npc.tx+fx,frontY=npc.ty+fy;
+  const facingNPC=(playerDir+2)%4===npcDir;
+  return ptx===frontX&&pty===frontY&&facingNPC;
+}
+function getTalkNPC(){
+  return NPCS.find(n=>n.zone===G.zone&&playerCanTalkToNPC(n));
+}
+function interactWithFacingNPC(){
+  const npc=getTalkNPC();
+  if(!npc)return false;
+  snapPlayerToTile();
+  if(npc.isTrader){talkToBoatman(npc);return true;}
+  if(!npc.defeated){triggerTrainerBattle(npc);return true;}
+  G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight!'}`;
+  G.pcMsgTimer=160;
+  return true;
+}
+function openTrainerReward(){
+  if(G.pendingReward){
+    G.screen='reward';
+    return;
+  }
+  if(G.battle&&G.battle.trainer) G.battle.trainer.npc.defeated=true;
+  G.battlePhase='over';
+  G.battleMsg=(G.battle&&G.battle.trainer?G.battle.trainer.name:'Trainer')+' was defeated!';
+}
+function endBattle(){
+  saveBattleHP();
+  if(G.naming){G.screen='naming';return;}
+  if(G.pendingAction==='whiteout'){startWhiteout();return;}
+  G.screen='world';
+  checkUnlocks();
+  autoSave();
+}
 function checkUnlocks(){
   const z=typeof G.zone==='number'?G.zone:G.prevZone||1;
   function zoneCleared(zn){
@@ -2164,6 +2447,7 @@ function confirmName(skip=false){
   G.naming = false; G.nameTarget = null; G.nameStr = '';
   G.screen = 'world';
   checkUnlocks();
+  autoSave();
 }
 
 // ═══════════════════════════════════════════════
@@ -2272,7 +2556,7 @@ function drawGear(){
       T(opt.label, px+pillW/2, py+pillH/2+4, 5, selected ? '#fff' : '#303848', 'center');
       G.buttons.push({
         x: px, y: py, w: pillW, h: pillH, label: 'gear-'+slot+'-'+opt.id,
-        action: ()=>{ G.gear[slot] = opt.id; sfx('menu'); }
+        action: ()=>{ G.gear[slot] = opt.id; sfx('menu'); autoSave(); }
       });
     });
     yCursor += Math.ceil(opts.length / pillsPerRow) * (pillH + pillGap) + 6;
@@ -2283,6 +2567,7 @@ function drawGear(){
   BTN(160, 398, 150, 24, 'RESET TO DEFAULTS', ()=>{
     G.gear = {hat:'cap', jacket:'red', pants:'jeans', tool:'backpack'};
     sfx('menu');
+    autoSave();
   });
   T('Tap a tile to swap.',  324, 412, 5, '#9098a8', 'center');
 }
@@ -2329,7 +2614,14 @@ function drawLoadout(){
   }
   BTN(4,412,150,18,'← BACK',()=>G.screen=G.prevScreen||'menu');
 }
-function moveLoadout(i,dir){const j=i+dir;if(j<0||j>=G.loadout.length)return;const tmp=G.loadout[i];G.loadout[i]=G.loadout[j];G.loadout[j]=tmp;}
+function moveLoadout(i,dir){
+  const j=i+dir;
+  if(j<0||j>=G.loadout.length)return;
+  const tmp=G.loadout[i];
+  G.loadout[i]=G.loadout[j];
+  G.loadout[j]=tmp;
+  autoSave();
+}
 
 // ═══════════════════════════════════════════════
 // TITLE
@@ -2422,6 +2714,7 @@ function drawReward(){
     saveBattleHP();
     G.screen='world';
     checkUnlocks();
+    autoSave();
   });
 }
 
@@ -2438,7 +2731,9 @@ function loop(){
     case 'item_reward': drawItemReward();   break;
     case 'intro':   drawIntro();  break;
     case 'world':   drawWorld();  break;
+    case 'battle_transition': drawBattleTransition(); break;
     case 'battle':  drawBattle(); break;
+    case 'whiteout': drawWhiteout(); break;
     case 'naming':  drawNaming(); break;
     case 'menu':    drawMenu();   break;
     case 'bugdex':  drawBugdex(); break;
@@ -2469,7 +2764,7 @@ document.addEventListener('keydown',e=>{
       G.saveName=name; saveToSlot(_nameInput.slot); G.screen='world';
     } else if(e.key.length===1&&_nameInput.str.length<14) _nameInput.str+=e.key;
   }
-  if(e.key==='Enter'&&G.screen==='world')G.screen='menu';
+  if(e.key==='Enter'&&G.screen==='world')openMenuFromWorld();
   if(e.key==='Enter'&&G.screen==='intro')advanceIntro();
   // B = back in battle move screen
   if((e.key==='b'||e.key==='B')&&G.screen==='battle'&&G.battlePhase==='move'){G.battlePhase='action';}
@@ -2479,10 +2774,7 @@ document.addEventListener('keydown',e=>{
     if(G.battlePhase==='over'){endBattle();return;}
     if(G.battlePhase==='trainer-show'){G.battlePhase='trainer-out';G.trainerAnimT=0;return;}
     if(G.battlePhase==='trainer-defeat'){
-      if(G.pendingReward){G.screen='reward';return;}
-      if(G.battle && G.battle.trainer) G.battle.trainer.npc.defeated = true;
-      G.battlePhase = 'over';
-      G.battleMsg = (G.battle && G.battle.trainer ? G.battle.trainer.name : 'Trainer') + ' was defeated!';
+      openTrainerReward();
       return;
     }
   }
@@ -2494,15 +2786,7 @@ document.addEventListener('keydown',e=>{
     if(ftile===11)enterPC();
     if(ftile===12)exitPC();
     if(ftile===13)tryTalkDesk();
-    const npc=getNPCAt(G.zone,tx+ddx,ty+ddy);
-    // Also check boat tiles adjacent
-    const boatNpc=NPCS.find(n=>n.zone===G.zone&&n.isTrader&&
-      Math.abs(n.tx-(tx+ddx))<=1&&Math.abs(n.ty-(ty+ddy))<=1);
-    if(boatNpc){talkToBoatman(boatNpc);return;}
-    if(npc&&!npc.defeated&&!npc.isTrader)triggerTrainerBattle(npc);
-    else if(npc&&npc.defeated&&!npc.isTrader){
-      G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight!'}`;G.pcMsgTimer=160;
-    }
+    if(interactWithFacingNPC())return;
   }
   if(G.screen==='naming'){
     if(e.key==='Backspace')G.nameStr=G.nameStr.slice(0,-1);
@@ -2579,10 +2863,7 @@ setupBtn('btn-a',()=>{
     if(G.battlePhase==='over'){endBattle();return;}
     if(G.battlePhase==='trainer-show'){G.battlePhase='trainer-out';G.trainerAnimT=0;return;}
     if(G.battlePhase==='trainer-defeat'){
-      if(G.pendingReward){G.screen='reward';return;}
-      if(G.battle && G.battle.trainer) G.battle.trainer.npc.defeated = true;
-      G.battlePhase = 'over';
-      G.battleMsg = (G.battle && G.battle.trainer ? G.battle.trainer.name : 'Trainer') + ' was defeated!';
+      openTrainerReward();
       return;
     }
     if(G.battlePhase==='action'){/* default to FIGHT */G.battlePhase='move';return;}
@@ -2596,15 +2877,7 @@ setupBtn('btn-a',()=>{
     if(ftile===11){enterPC();return;}
     if(ftile===12){exitPC();return;}
     if(ftile===13){tryTalkDesk();return;}
-    // Boatman check
-    const boatNpc=NPCS.find(n=>n.zone===G.zone&&n.isTrader&&
-      Math.abs(n.tx-(tx+ddx))<=1&&Math.abs(n.ty-(ty+ddy))<=1);
-    if(boatNpc){talkToBoatman(boatNpc);return;}
-    const npc=getNPCAt(G.zone,tx+ddx,ty+ddy);
-    if(npc&&!npc.defeated&&!npc.isTrader){triggerTrainerBattle(npc);return;}
-    else if(npc&&npc.defeated&&!npc.isTrader){
-      G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight!'}`;G.pcMsgTimer=160;return;
-    }
+    if(interactWithFacingNPC())return;
   }
 });
 setupBtn('btn-b',()=>{
@@ -2614,7 +2887,7 @@ setupBtn('btn-b',()=>{
   if(G.screen==='menu')G.screen='world';
 });
 setupBtn('btn-menu',()=>{
-  if(G.screen==='world')G.screen='menu';
+  if(G.screen==='world')openMenuFromWorld();
   else if(G.screen==='menu')G.screen='world';
 });
 setupBtn('btn-start',()=>{
@@ -2811,12 +3084,14 @@ function drawBoatmanTrade(){
   // Boat in background
   X.fillStyle='#1848a8';X.fillRect(0,200,480,232);
   X.fillStyle='rgba(80,160,255,0.2)';X.fillRect(0,210,480,2);X.fillRect(0,220,480,2);
-  // The boat
-  X.fillStyle='#7a4818';X.fillRect(160,180,160,40);
-  X.fillStyle='#9a6030';X.fillRect(162,178,156,4);
-  X.fillStyle='#5a3008';X.fillRect(162,218,156,4);
+  // The white boat
+  X.fillStyle='#d8e8f0';X.fillRect(160,184,160,34);
+  X.fillStyle='#f8f8f0';X.fillRect(164,178,152,12);
+  X.fillStyle='#b8c8d0';X.fillRect(164,216,152,4);
+  X.fillStyle='#78a0b8';X.fillRect(182,192,116,12);
+  X.fillStyle='#f8f8f0';X.fillRect(158,190,8,20);X.fillRect(314,190,8,20);
   // Draw boatman NPC sprite
-  drawNPCSprite(X,240,178,'angler',2,false);
+  drawNPCSprite(X,240,178,'sailor',2,false);
 
   panel(40,14,400,34,'#f8f8e8');
   T('BOATMAN CLYDE',240,34,8,'#303848','center');
@@ -2878,6 +3153,12 @@ function doBoatmanTrade(){
   G.screen='item_reward';
 }
 
+function finishItemReward(){
+  G.screen='world';
+  G.pendingItemReward=null;
+  autoSave();
+}
+
 // ═══════════════════════════════════════════════
 // ITEM REWARD SCREEN
 // ═══════════════════════════════════════════════
@@ -2902,9 +3183,9 @@ function drawItemReward(){
   r.desc.split('\n').forEach((l,i)=>T(l,240,264+i*18,6,'#607080','center'));
 
   if(Math.floor(G.tick/22)%2===0)
-    BTN(180,330,120,28,'AWESOME! →',()=>{G.screen='world';G.pendingItemReward=null;});
+    BTN(180,330,120,28,'AWESOME! →',finishItemReward);
   else
-    G.buttons.push({x:180,y:330,w:120,h:28,label:'item_ok',action:()=>{G.screen='world';G.pendingItemReward=null;}});
+    G.buttons.push({x:180,y:330,w:120,h:28,label:'item_ok',action:finishItemReward});
   T('press A to continue',240,370,5,'#909898','center');
 }
 
@@ -2926,8 +3207,8 @@ function drawRakeSprite(ctx,cx,cy,s){
 // RAKE ACTION — used in water tiles in zone 2
 // ═══════════════════════════════════════════════
 const RAKE_RESULTS=['lakeweed','shinyrock','mosquito_battle','scrap','nothing'];
-// weights: lakeweed=3,shinyrock=2,mosquito=2,scrap=2,nothing=1 (out of 10)
-const RAKE_WEIGHTS=[3,2,2,2,1];
+// Equal 1-in-5 rake outcomes.
+const RAKE_WEIGHTS=[1,1,1,1,1];
 
 function doRakeAction(){
   if(!G.inventory.lakeRake) return;
@@ -2946,7 +3227,7 @@ function doRakeAction(){
   G.rake.anim=40;
 
   // Pick a result (weighted random)
-  const roll=Math.random()*10;
+  const roll=Math.random()*RAKE_WEIGHTS.reduce((sum,w)=>sum+w,0);
   let acc=0,result='nothing';
   RAKE_RESULTS.forEach((r,i)=>{acc+=RAKE_WEIGHTS[i];if(roll<acc&&result==='nothing')result=r;});
 
@@ -2970,7 +3251,7 @@ function doRakeAction(){
           G.battleMsg=`A Lv.${lvl} MOSQUITO LARVA\nwriggled out!`;
           G.battlePhase='action';G.pendingAction=null;
           G.btFlashP=0;G.btFlashE=0;G.btTick=0;G.swapMode=false;
-          G.screen='battle';sfx&&sfx('encounter');
+          startBattleTransition();sfx&&sfx('encounter');
         }
       },900);
     } else if(result==='scrap'){
@@ -2980,6 +3261,7 @@ function doRakeAction(){
     } else {
       G.pcMsg='Nothing in this spot.';G.pcMsgTimer=100;
     }
+    autoSave();
   },600);
 }
 
@@ -3004,11 +3286,12 @@ const NPCS = [
     team:[{id:'stag',lvl:4},{id:'ambush',lvl:5},{id:'worm',lvl:5}],
     rewardId:'worm', defeated:false},
   // ── Zone 2 — Boatman (non-combat trade NPC) ──
-  {zone:2, tx:15, ty:12, dir:2, sprite:'angler', name:'BOATMAN CLYDE',
+  {zone:2, tx:15, ty:12, dir:2, sprite:'sailor', name:'BOATMAN CLYDE', drawOffsetX:8, drawOffsetY:1,
     isTrader:true, // flag: no battle, just dialog
     intro:"My wife's obsessed with\nGiant Water Bugs. Don't\nask me why...",
     afterMsg:"Thanks pal. Rake's all yours.",
     defeated:false}, // 'defeated' here means traded
+  {zone:2, tx:7, ty:16, dir:2, sprite:'angler', name:'POND KING SAL',
     intro:"My pond, my rules.\nMeet my crew.",
     afterMsg:"Fair beat. Boatman's yours.",
     team:[{id:'backswim',lvl:5},{id:'waterbug',lvl:6},{id:'boatman',lvl:7}],
@@ -3039,9 +3322,10 @@ function checkNPCLineOfSight(){
   const ptx = Math.round(p.x/TW), pty = Math.round(p.y/TW);
   const SIGHT = 3;
   for(const n of NPCS){
-    if(n.zone !== G.zone || n.defeated) continue;
+    if(n.zone !== G.zone || n.defeated || n.isTrader) continue;
     const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
-    const [dx,dy] = dirs[n.dir||2];
+    const ndir=n.dir!==undefined?n.dir:2;
+    const [dx,dy] = dirs[ndir];
     for(let i=1;i<=SIGHT;i++){
       const tx = n.tx + dx*i, ty = n.ty + dy*i;
       const tile = gt(G.zone, tx, ty);
@@ -3068,7 +3352,7 @@ function triggerTrainerBattle(npc){
   G.battlePhase = 'trainer-show';
   G.trainerAnimT = 0;
   G.btFlashP = 0; G.btFlashE = 0; G.btTick = 0; G.swapMode = false;
-  G.screen = 'battle';
+  startBattleTransition();
   sfx('encounter');
 }
 
@@ -3078,10 +3362,11 @@ function drawNPCs(ctx, camX, camY){
     const sx = n.tx*TW + TW/2 - camX;
     const sy = n.ty*TW + TW - camY;
     if(sx < -32 || sx > 512 || sy < -32 || sy > 464) return;
-    // Sight cone — show 3 dots in NPC's gaze direction (only if not defeated)
-    if(!n.defeated){
+    // Sight cone — traders are conversation-only, so no glowing aggro dots.
+    if(!n.defeated&&!n.isTrader){
       const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
-      const [dx,dy] = dirs[n.dir||2];
+      const ndir=n.dir!==undefined?n.dir:2;
+      const [dx,dy] = dirs[ndir];
       const pulse = Math.sin(G.tick*0.12) * 0.4 + 0.6;
       for(let i=1;i<=3;i++){
         const tx = n.tx + dx*i, ty = n.ty + dy*i;
@@ -3095,9 +3380,9 @@ function drawNPCs(ctx, camX, camY){
         ctx.fillRect(dotX-2, dotY-2, 4, 4);
       }
     }
-    drawNPCSprite(ctx, sx, sy, n.sprite, n.dir||2, n.defeated);
+    drawNPCSprite(ctx, sx+(n.drawOffsetX||0), sy+(n.drawOffsetY||0), n.sprite, n.dir!==undefined?n.dir:2, n.defeated);
     // Exclamation/eye marker if not defeated
-    if(!n.defeated){
+    if(!n.defeated&&!n.isTrader){
       const bob = Math.sin(G.tick*0.08 + n.tx)*1.5;
       ctx.fillStyle='#f8e030';
       ctx.fillRect(sx-2, sy-28+bob, 4, 8);
@@ -3108,7 +3393,39 @@ function drawNPCs(ctx, camX, camY){
     }
   });
 }
+function drawSailorNPC(ctx, x, y, dir, dim){
+  ctx.save();
+  if(dim) ctx.globalAlpha = 0.7;
+  // Boat-seat shadow and tucked legs
+  ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fillRect(x-9,y+5,18,3);
+  ctx.fillStyle='#203858'; ctx.fillRect(x-7,y-3,14,8);
+  ctx.fillStyle='#182840'; ctx.fillRect(x-8,y+3,16,4);
+  // White rail in front makes him read as seated inside the boat.
+  ctx.fillStyle='#f8f8f0'; ctx.fillRect(x-12,y+5,24,5);
+  ctx.fillStyle='#b8c8d0'; ctx.fillRect(x-11,y+9,22,2);
+  // Sailor shirt and collar
+  ctx.fillStyle='#f0f4f8'; ctx.fillRect(x-7,y-17,14,15);
+  ctx.fillStyle='#1e4a78'; ctx.fillRect(x-7,y-17,14,4);
+  ctx.fillRect(x-5,y-13,3,7); ctx.fillRect(x+2,y-13,3,7);
+  ctx.fillStyle='#d84030'; ctx.fillRect(x-1,y-13,2,8);
+  // Arms and hands resting on rail
+  ctx.fillStyle='#f0f4f8'; ctx.fillRect(x-11,y-15,4,12); ctx.fillRect(x+7,y-15,4,12);
+  ctx.fillStyle='#f8c88a'; ctx.fillRect(x-11,y-4,4,4); ctx.fillRect(x+7,y-4,4,4);
+  // Head
+  ctx.fillStyle='#f8c88a'; ctx.fillRect(x-5,y-26,10,9);
+  ctx.fillStyle='#e8b87a'; ctx.fillRect(x-6,y-24,2,5); ctx.fillRect(x+4,y-24,2,5);
+  ctx.fillStyle='#1a1010';
+  if(dir===2){ ctx.fillRect(x-3,y-22,2,2); ctx.fillRect(x+1,y-22,2,2); }
+  else if(dir===3){ ctx.fillRect(x-4,y-22,2,2); }
+  else if(dir===1){ ctx.fillRect(x+2,y-22,2,2); }
+  // Sailor cap
+  ctx.fillStyle='#f8f8f0'; ctx.fillRect(x-7,y-30,14,5);
+  ctx.fillStyle='#d8e8f0'; ctx.fillRect(x-6,y-31,12,3);
+  ctx.fillStyle='#1e4a78'; ctx.fillRect(x-5,y-26,10,2);
+  ctx.restore();
+}
 function drawNPCSprite(ctx, x, y, sprite, dir, dim){
+  if(sprite==='sailor'){drawSailorNPC(ctx,x,y,dir,dim);return;}
   ctx.save();
   if(dim) ctx.globalAlpha = 0.7;
   // Shadow
