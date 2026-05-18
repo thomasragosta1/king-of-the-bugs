@@ -2366,15 +2366,29 @@ function doRun(){
 function faceDirs(){return [[0,-1],[1,0],[0,1],[-1,0]];}
 function playerCanTalkToNPC(npc){
   if(!npc)return false;
+
   const p=G.player;
   const ptx=Math.round(p.x/TW),pty=Math.round(p.y/TW);
   const dirs=faceDirs();
-  const npcDir=npc.dir!==undefined?npc.dir:2;
   const playerDir=p.dir!==undefined?p.dir:2;
-  const [fx,fy]=dirs[npcDir];
-  const frontX=npc.tx+fx,frontY=npc.ty+fy;
+  const [dx,dy]=dirs[playerDir]||[0,1];
+
+  // Normal interaction: talk to the NPC/tile directly in front of the player.
+  const targetX=ptx+dx,targetY=pty+dy;
+  if(targetX===npc.tx&&targetY===npc.ty)return true;
+
+  // Boatman Clyde is drawn on a 2-tile boat: map tiles (15,12) and (16,12).
+  // His NPC anchor is only (15,12), so allow interacting with either boat tile.
+  if(npc.isTrader&&npc.name==='BOATMAN CLYDE'){
+    if(targetY===npc.ty&&(targetX===npc.tx||targetX===npc.tx+1))return true;
+  }
+
+  // Fallback: support the older “stand in front of the NPC and face them” logic.
+  const npcDir=npc.dir!==undefined?npc.dir:2;
+  const [fx,fy]=dirs[npcDir]||[0,1];
+  const npcFrontX=npc.tx+fx,npcFrontY=npc.ty+fy;
   const facingNPC=(playerDir+2)%4===npcDir;
-  return ptx===frontX&&pty===frontY&&facingNPC;
+  return ptx===npcFrontX&&pty===npcFrontY&&facingNPC;
 }
 function getTalkNPC(){
   return NPCS.find(n=>n.zone===G.zone&&playerCanTalkToNPC(n));
