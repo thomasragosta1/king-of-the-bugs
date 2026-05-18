@@ -325,7 +325,17 @@ function dn(bug){
   return BUGS[bug.id].name;
 }
 function buildBattleParty(){
-  return G.loadout.slice(0, 6).map(inst => makeBugFromInstance(inst));
+  // Build the active battle party from the first 6 loadout slots,
+  // but lead with the first bug that still has HP. Fainted bugs stay
+  // available in the party list, just pushed behind healthy bugs so
+  // they do not automatically come out first in the next battle.
+  const party = G.loadout.slice(0, 6).map(inst => makeBugFromInstance(inst));
+  const healthy = party.filter(b => b.hp > 0);
+  const fainted = party.filter(b => b.hp <= 0);
+  return healthy.concat(fainted);
+}
+function hasBattleReadyBug(){
+  return G.loadout.slice(0, 6).some(inst => inst.hp > 0);
 }
 function saveBattleHP(){
   // Write battle-bug HP back to its owned instance
@@ -1769,6 +1779,7 @@ function triggerEnc(){
   const zl=zoneLevel(G.zone);
   const wlvl=zl.min+Math.floor(Math.random()*(zl.max-zl.min+1));
   G.battle={wild:makeBug(wid,{isWild:true,level:wlvl}),trainer:null};
+  if(!hasBattleReadyBug()){G.battle=null;startWhiteout();return;}
   G.battleParty=buildBattleParty();
   if(!G.battleParty.length){G.battle=null;return;}
   G.battleMsg=`A wild Lv.${wlvl} ${BUGS[wid].name}\nappeared!`;
@@ -3220,9 +3231,9 @@ function drawRakeSprite(ctx,cx,cy,s){
 // ═══════════════════════════════════════════════
 // RAKE ACTION — used in water tiles in zone 2
 // ═══════════════════════════════════════════════
-const RAKE_RESULTS=['lakeweed','shinyrock','mosquito_battle','scrap','nothing'];
-// Equal 1-in-5 rake outcomes.
-const RAKE_WEIGHTS=[1,1,1,1,1];
+const RAKE_RESULTS=['lakeweed','shinyrock','mosquito_battle','scrap'];
+// Raking: 1-in-4 chance to find something, otherwise nothing here.
+const RAKE_FIND_CHANCE=0.25;
 
 function doRakeAction(){
   if(!G.inventory.lakeRake) return;
@@ -3240,10 +3251,11 @@ function doRakeAction(){
   // Trigger rake animation
   G.rake.anim=40;
 
-  // Pick a result (weighted random)
-  const roll=Math.random()*RAKE_WEIGHTS.reduce((sum,w)=>sum+w,0);
-  let acc=0,result='nothing';
-  RAKE_RESULTS.forEach((r,i)=>{acc+=RAKE_WEIGHTS[i];if(roll<acc&&result==='nothing')result=r;});
+  // Pick a result: 75% nothing, 25% one random rake find.
+  let result='nothing';
+  if(Math.random()<RAKE_FIND_CHANCE){
+    result=RAKE_RESULTS[Math.floor(Math.random()*RAKE_RESULTS.length)];
+  }
 
   setTimeout(()=>{
     if(result==='lakeweed'){
@@ -3260,6 +3272,7 @@ function doRakeAction(){
         const zl=zoneLevel(2);
         const lvl=zl.min+Math.floor(Math.random()*(zl.max-zl.min+1));
         G.battle={wild:makeBug('mosquito',{isWild:true,level:lvl}),trainer:null};
+        if(!hasBattleReadyBug()){G.battle=null;startWhiteout();return;}
         G.battleParty=buildBattleParty();
         if(G.battleParty.length){
           G.battleMsg=`A Lv.${lvl} MOSQUITO LARVA\nwriggled out!`;
@@ -3273,7 +3286,7 @@ function doRakeAction(){
       G.pcMsg=`Found some scrap metal.\nMaybe useful?\n(Have: ${G.inventory.scrapMetal})`;
       G.pcMsgTimer=180;sfx&&sfx('buff');
     } else {
-      G.pcMsg='Nothing in this spot.';G.pcMsgTimer=100;
+      G.pcMsg='Nothing here.';G.pcMsgTimer=100;
     }
     autoSave();
   },600);
@@ -3360,6 +3373,7 @@ function triggerTrainerBattle(npc){
     wild: makeBug(lead.id, {isWild:true, level:lead.lvl}),
     trainer: {name:npc.name, team:npc.team, idx:0, npc:npc, rewardId:npc.rewardId}
   };
+  if(!hasBattleReadyBug()){G.battle=null;startWhiteout();return;}
   G.battleParty = buildBattleParty();
   if(!G.battleParty.length){G.battle=null;return;}
   G.battleMsg = `${npc.name}:\n${npc.intro}`;
