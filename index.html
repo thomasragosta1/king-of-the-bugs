@@ -213,7 +213,7 @@ const G={
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0},
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0},
   fruitTrees:{checked:{}},
   // Rake system
   rake:{
@@ -224,6 +224,10 @@ const G={
   // Boatman trade
   boatmanTalked:false,
   boatmanTraded:false,
+  // Escort state (Jesse leads player to hive after zone 3 cleared)
+  escort:{active:false,phase:'',timer:0,escortX:0,escortY:0,targetX:0,targetY:0,step:0},
+  // Hive shrine
+  hiveOfferings:0, // honeybees offered (0–5)
   // Pig NPC state
   pig:{
     searching:false,  // true while pig is running animation
@@ -265,6 +269,12 @@ const BUGS={
   elephant:{name:'ELEPHANT BEETLE',type:'BEETLE',  hp:68,atk:22,def:19,spd:5, zone:'high', moves:['Horn Slam','Iron Shell','Bash','Pincer']},
   cocoon:  {name:'COCOON',         type:'MOLD',    hp:42,atk:6, def:20,spd:1, zone:1, fruitOnly:true, moves:['Wiggle']},
   monarch: {name:'MONARCH',        type:'FLYING',  hp:48,atk:17,def:9, spd:24,zone:1, fruitOnly:true, moves:['Wing Gale','Milkweed Dust','Sunbeam','Migration Rush']},
+  silkcocoon:{name:'SILK COCOON',  type:'MOLD',    hp:40,atk:5, def:22,spd:1, zone:1, fruitOnly:true, moves:['Wiggle']},
+  silkmoth:{name:'SILK MOTH',      type:'FLYING',  hp:50,atk:14,def:12,spd:20,zone:1, fruitOnly:true, moves:['Wing Gale','Gust','Silk Wrap','Bloom Haze']},
+  yellowjacket:{name:'YELLOW JACKET',type:'FLYING',hp:44,atk:20,def:10,spd:22,zone:'hive', moves:['Sting','Buzz Dive','Hive Rush','Gust']},
+  hornet:   {name:'HORNET',        type:'FLYING',  hp:52,atk:24,def:12,spd:18,zone:'hive', moves:['Sting','Giant Horn','Buzz Dive','Sky Cutter']},
+  honeybee: {name:'HONEYBEE',      type:'FLYING',  hp:40,atk:16,def:14,spd:20,zone:'hive', moves:['Sting','Pollen Toss','Hive Rush','Dodge']},
+  queenbee: {name:'QUEEN BEE',     type:'FLYING',  hp:70,atk:28,def:18,spd:16,zone:'hive', shrineOnly:true, moves:['Hive Rush','Giant Horn','Sky Cutter','Thunder Buzz']},
 };
 // ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
 const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
@@ -298,13 +308,18 @@ const LEARNSETS={
   mosquito:[[7,'Aqua Lance'],[12,'Thunder Buzz']],cicada:[[11,'Thunder Buzz'],[14,'Sky Cutter']],tentcat:[[11,'Bloom Haze'],[14,'Root Snare']],
   elephant:[[11,'Giant Horn'],[15,'Shell Break']],stinkbug:[[6,'Bloom Haze'],[12,'Raptor Slash']],worm:[[6,'Root Snare'],[12,'Spore Bomb']],
   boatman:[[8,'Aqua Lance'],[12,'Tidal Crush']],diver:[[8,'Tidal Crush'],[13,'Shell Break']],mayfly:[[11,'Thunder Buzz'],[14,'Sky Cutter']],pillbug:[[11,'Shell Break'],[14,'Giant Horn']],
+  silkmoth:[[8,'Sky Cutter'],[13,'Thunder Buzz']],
+  yellowjacket:[[8,'Sky Cutter'],[13,'Thunder Buzz']],
+  hornet:[[9,'Giant Horn'],[14,'Thunder Buzz']],
+  honeybee:[[7,'Hive Rush'],[12,'Sky Cutter']],
+  queenbee:[[12,'Thunder Buzz'],[16,'Thunder Buzz']],
 };
 
 // G.loadout: array of instance objects with their own level/xp/hp.
 // G.seen: Set of species ids ever caught (used by Bugdex).
 let _uidCounter = 0;
 function xpForLevel(L){return 8+L*6;} // XP needed to go from L to L+1
-function zoneLevel(z){return z===1?{min:2,max:4}:z===2?{min:4,max:7}:z===3?{min:7,max:10}:z==='high'?{min:10,max:14}:{min:2,max:4};}
+function zoneLevel(z){return z===1?{min:2,max:4}:z===2?{min:4,max:7}:z===3?{min:7,max:10}:z==='high'?{min:10,max:14}:z==='hive'?{min:9,max:13}:{min:2,max:4};}
 function levelStats(id,level){
   const b=BUGS[id], lv=Math.max(1,level||1)-1;
   return{
@@ -426,7 +441,7 @@ function getSlotInfo(n){
 }
 
 const SAVE_VERSION = 2;
-const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0};
+const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0};
 
 function clonePlain(value, fallback){
   if(value === undefined || value === null) return fallback;
@@ -494,7 +509,7 @@ function normalizeSavedLoadout(saved){
 }
 
 function resetAllMaps(){
-  [1,2,3,'high','pc'].forEach(z => resetMap(z));
+  [1,2,3,'high','hive','pc'].forEach(z => resetMap(z));
 }
 
 function getSaveData(){
@@ -520,6 +535,7 @@ function getSaveData(){
     fruitTrees:   {checked: clonePlain(G.fruitTrees && G.fruitTrees.checked, {})},
     boatmanTalked: !!G.boatmanTalked,
     boatmanTraded: !!G.boatmanTraded,
+    hiveOfferings: G.hiveOfferings||0,
     pigFeeds:     G.pig._feeds || 0,
     npcStates:    getNPCSaveState(),
     bugdexScroll: G.bugdexScroll || 0,
@@ -572,6 +588,7 @@ function loadFromSlot(n){
     G.fruitTrees = {checked: clonePlain(d.fruitTrees && d.fruitTrees.checked, {})};
     G.boatmanTalked = !!d.boatmanTalked;
     G.boatmanTraded = !!d.boatmanTraded;
+    G.hiveOfferings = d.hiveOfferings||0;
     G.pig._feeds = d.pigFeeds || 0;
     G.pig.searching = false; G.pig.timer = 0; G.pig.result = null;
     G.bugdexScroll = d.bugdexScroll || 0;
@@ -783,7 +800,7 @@ function spTentcat(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);
 function spElephant(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx-15*s,t=cy-12*s;DR(c,o,t,2,8,28,16,'#1c1720',s);DR(c,o,t,4,5,24,18,'#282030',s);DR(c,o,t,10,0,14,9,'#201828',s);DR(c,o,t,12,2,4,4,'#e04040',s);DR(c,o,t,20,2,4,4,'#e04040',s);DR(c,o,t,15,-9,5,12,'#201828',s);DR(c,o,t,12,-12,11,5,'#201828',s);DR(c,o,t,9,-15,6,4,'#201828',s);DR(c,o,t,21,-15,6,4,'#201828',s);DR(c,o,t,12,13,18,4,'#544070',s);DR(c,o,t,-5,11,8,3,'#1a1420',s);DR(c,o,t,29,11,8,3,'#1a1420',s);DR(c,o,t,-8,14,7,3,'#1a1420',s);DR(c,o,t,34,14,7,3,'#1a1420',s);DR(c,o,t,6,22,5,5,'#101018',s);DR(c,o,t,21,22,5,5,'#101018',s);c.restore();}
 function spCocoon(c,cx,cy,s,f){c.save();const o=cx-8*s,t=cy-15*s;DR(c,o,t,2,0,12,28,'#d8c088',s);DR(c,o,t,0,5,16,18,'#c0a070',s);for(let i=0;i<5;i++)DR(c,o,t,1,5+i*4,14,1,'#9a8058',s);DR(c,o,t,4,3,8,4,'#efe0b0',s);DR(c,o,t,6,9,4,3,'#806840',s);c.restore();}
 function spMonarch(c,cx,cy,s,f){c.save();if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}const o=cx,t=cy;DR(c,o,t,-2,-14,4,28,'#202020',s);DR(c,o,t,-4,-18,8,7,'#303030',s);c.fillStyle='#f07818';c.fillRect(o-28*s,t-22*s,24*s,30*s);c.fillRect(o+4*s,t-22*s,24*s,30*s);c.fillStyle='#d85010';c.fillRect(o-24*s,t+4*s,20*s,18*s);c.fillRect(o+4*s,t+4*s,20*s,18*s);c.fillStyle='#101010';c.fillRect(o-28*s,t-22*s,5*s,44*s);c.fillRect(o+23*s,t-22*s,5*s,44*s);c.fillRect(o-28*s,t-2*s,56*s,4*s);c.fillRect(o-8*s,t-22*s,4*s,44*s);c.fillRect(o+4*s,t-22*s,4*s,44*s);c.fillStyle='#ffffff';[[-23,-16],[-18,12],[17,-16],[22,12]].forEach(([x,y])=>c.fillRect(o+x*s,t+y*s,4*s,4*s));DR(c,o,t,-7,-25,2,8,'#202020',s);DR(c,o,t,5,-25,2,8,'#202020',s);c.restore();}
-const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito,cicada:spCicada,tentcat:spTentcat,elephant:spElephant,cocoon:spCocoon,monarch:spMonarch};
+const SFN={ambush:spAmbush,firefly:spFirefly,strider:spStrider,stag:spStag,bee:spBee,waterbug:spWaterbug,backswim:spBackswim,larva:spLarva,carrion:spCarrion,slug:spSlug,shroomfly:spShroomfly,fungus:spFungus,mosquito:spMosquito,cicada:spCicada,tentcat:spTentcat,elephant:spElephant,cocoon:spCocoon,monarch:spMonarch,silkcocoon:null,silkmoth:null,yellowjacket:null,hornet:null,honeybee:null,queenbee:null};
 function drawBug(ctx,id,cx,cy,s=1,flip=false){if(SFN[id])SFN[id](ctx,cx,cy,s,flip);}
 
 // ── PLAYER SPRITE ──────────────────────────────
@@ -1112,6 +1129,7 @@ function drawTypeBadge(x,y,t){
 // 4=path 5=PCbuilding(solid) 6=portal 7=pond 9=shrooms
 // 11=PCdoor(enter) 12=PCexit 13=PCdesk 14=PCfloor 15=PCcounter
 // 21=treetop 22=sky bridge 23=dream bed 24=lab bed 25=open sky 26=aquarium 27=flowery treetop encounter 28=fruit tree
+// 30=flower field(hive encounter) 31=hive entrance 32=hive interior floor 33=honeycomb shrine
 // ═══════════════════════════════════════════════
 const TW=16,TALL=27,WIDE=30;
 const MAPS={};
@@ -1174,6 +1192,29 @@ function buildMap(z){
       for(let y=sy;y<sy+h&&y<TALL-1;y++)for(let x=sx;x<sx+w&&x<WIDE-1;x++)m[y][x]=2;
     });
     m[1][14]=6;m[1][15]=6;
+    if(G.unlockedZones&&G.unlockedZones.has('hive')){m[13][1]=6;m[14][1]=6;}
+  } else if(z==='hive'){
+    // ── THE HIVE — flower field with central hive building ──
+    // Background: flower field (encounter)
+    for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=30;
+    // Perimeter flower-hedge walls
+    for(let y=0;y<TALL;y++) for(let x=0;x<WIDE;x++){
+      if(y<2||y>=TALL-2||x<2||x>=WIDE-2) m[y][x]=2;
+    }
+    // Central clear paths
+    for(let y=2;y<TALL-2;y++){m[y][14]=4;m[y][15]=4;}
+    for(let x=2;x<WIDE-2;x++){m[12][x]=4;m[20][x]=4;}
+    // Central hive building (7×6 block, center of map)
+    const HX=12,HY=9,HW=7,HH=6;
+    for(let y=HY;y<HY+HH;y++) for(let x=HX;x<HX+HW;x++) m[y][x]=5; // solid hive walls
+    // Hive interior — overwrite inner 5×4 with hive floor
+    for(let y=HY+1;y<HY+HH-1;y++) for(let x=HX+1;x<HX+HW-1;x++) m[y][x]=32;
+    // Honeycomb shrine in center of hive
+    m[HY+2][HX+3]=33;
+    // Hive entrance (bottom center of hive block)
+    m[HY+HH-1][HX+3]=31;
+    // Portal back to zone 3 — right wall, mid height
+    m[13][WIDE-2]=6;m[14][WIDE-2]=6;
   } else if(z==='high'){
     for(let y=0;y<TALL;y++)for(let x=0;x<WIDE;x++)m[y][x]=25;
     const crowns=[[2,15,9,6],[11,11,9,6],[20,14,8,6],[5,6,8,5],[16,5,9,5]];
@@ -1232,7 +1273,7 @@ function gt(z,tx,ty){
 }
 function resetMap(z){delete MAPS[z];}
 function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28;}
-function isEncounter(t){return t===1||t===7||t===9||t===27;}
+function isEncounter(t){return t===1||t===7||t===9||t===27||t===30;}
 function isWater(t){return t===7;}
 
 // ═══════════════════════════════════════════════
@@ -1242,7 +1283,7 @@ function drawTile(tile,sx,sy,tx,ty){
   const z=G.zone;
   switch(tile){
     case 0:
-      X.fillStyle=z==='pc'?'#c0c0b8':z===2?'#3878a8':z===3?'#281838':'#60a030';
+      X.fillStyle=z==='pc'?'#c0c0b8':z===2?'#3878a8':z===3?'#281838':z==='hive'?'#58b828':'#60a030';
       X.fillRect(sx,sy,TW,TW);break;
     case 1: { // GRASS - 3D blades with wind sway
       const gSway=Math.sin(G.tick*0.06+tx*0.4+ty*0.6)*1.4;
@@ -1265,7 +1306,17 @@ function drawTile(tile,sx,sy,tx,ty){
       break;
     }
     case 2: { // wall/tree
-      if(z===3){
+      if(z==='hive'){
+        // Flower hedge
+        X.fillStyle='#2a6010';X.fillRect(sx,sy,TW,TW);
+        X.fillStyle='#3a8018';X.fillRect(sx+1,sy+1,14,14);
+        X.fillStyle='#50a028';X.fillRect(sx+2,sy+2,12,10);
+        // Flowers on hedge
+        const hfc=['#ff3898','#fff050','#ff8030','#d060ff'];
+        const hf=hfc[(tx*3+ty*5)%hfc.length];
+        X.fillStyle=hf;X.fillRect(sx+4,sy+2,4,4);X.fillRect(sx+10,sy+5,4,4);
+        X.fillStyle='#fff890';X.fillRect(sx+5,sy+3,2,2);X.fillRect(sx+11,sy+6,2,2);
+      } else if(z===3){
         X.fillStyle='#180820';X.fillRect(sx,sy,TW,TW);
         X.fillStyle='#380848';X.fillRect(sx+1,sy+1,14,14);
         X.fillStyle='#501060';X.fillRect(sx+3,sy+1,10,6);
@@ -1307,8 +1358,15 @@ function drawTile(tile,sx,sy,tx,ty){
       break;
     }
     case 4: // path
-      X.fillStyle='#c8a060';X.fillRect(sx,sy,TW,TW);
-      X.fillStyle='#b89050';X.fillRect(sx+1,sy+1,6,6);X.fillRect(sx+9,sy+9,6,6);break;
+      if(G.zone==='hive'){
+        X.fillStyle='#c8a060';X.fillRect(sx,sy,TW,TW);
+        X.fillStyle='#e0c080';X.fillRect(sx+2,sy+2,12,12);
+        X.fillStyle='rgba(255,220,80,0.3)';X.fillRect(sx+1,sy+1,6,6);
+      } else {
+        X.fillStyle='#c8a060';X.fillRect(sx,sy,TW,TW);
+        X.fillStyle='#b89050';X.fillRect(sx+1,sy+1,6,6);X.fillRect(sx+9,sy+9,6,6);
+      }
+      break;
     case 5: { // field lab cabin exterior
       X.fillStyle='#5aa030';X.fillRect(sx,sy,TW,TW);
       X.fillStyle='#6a3a18';X.fillRect(sx,sy+4,TW,12);
@@ -1468,6 +1526,64 @@ function drawTile(tile,sx,sy,tx,ty){
       X.fillStyle='#00cc44';X.fillRect(sx+3+((G.tick>>3)%9),sy+6,2,1);
       X.fillStyle='#c8c0b0';X.fillRect(sx+2,sy+12,12,3);
       X.fillStyle='#a0a098';X.fillRect(sx+3,sy+13,10,1);break;
+    case 30: { // flower field (hive encounter tile)
+      X.fillStyle='#58b828';X.fillRect(sx,sy,TW,TW);
+      // Animated flowers
+      const fSway=Math.sin(G.tick*0.05+tx*0.5+ty*0.7)*1.2;
+      const fCols=['#ff3898','#fff050','#ff8030','#d060ff','#ff5050'];
+      const fc=fCols[(tx*3+ty*7)%fCols.length];
+      X.fillStyle='#2a7010';X.fillRect(sx+((tx*5+ty*3)%8),sy+4+(fSway|0),2,10);
+      X.fillStyle=fc;
+      const fpx=sx+2+((tx*5+ty*3)%8)+(fSway|0);
+      const fpy=sy+2+((tx*3+ty*5)%5);
+      X.fillRect(fpx,fpy,4,4); // center
+      X.fillRect(fpx-2,fpy+1,2,2);X.fillRect(fpx+4,fpy+1,2,2); // side petals
+      X.fillRect(fpx+1,fpy-2,2,2);X.fillRect(fpx+1,fpy+4,2,2); // top/bot petals
+      X.fillStyle='#fff890';X.fillRect(fpx+1,fpy+1,2,2); // pollen center
+      break;}
+    case 31: { // hive entrance
+      X.fillStyle='#d4a010';X.fillRect(sx,sy,TW,TW);
+      X.fillStyle='#8a5808';X.fillRect(sx+2,sy+2,12,12);
+      X.fillStyle='#f0c020';X.fillRect(sx+3,sy+3,10,10);
+      // Honeycomb hex pattern on entrance
+      X.fillStyle='#d4900a';
+      X.fillRect(sx+5,sy+4,6,3);X.fillRect(sx+4,sy+7,8,3);X.fillRect(sx+5,sy+10,6,2);
+      X.fillStyle='#f8d840';X.fillRect(sx+6,sy+5,4,2);X.fillRect(sx+5,sy+8,6,1);
+      break;}
+    case 32: { // hive interior floor
+      const hx=(tx+ty)%3;
+      X.fillStyle=hx===0?'#d4900a':hx===1?'#e8a820':'#c07808';
+      X.fillRect(sx,sy,TW,TW);
+      // Honeycomb cell lines
+      X.fillStyle='rgba(120,60,0,0.4)';
+      X.fillRect(sx,sy,TW,1);X.fillRect(sx,sy,1,TW);
+      X.fillRect(sx+8,sy,1,TW);X.fillRect(sx,sy+8,TW,1);
+      // Honey drip effect on some tiles
+      if((tx*7+ty*11)%5===0){
+        X.fillStyle='rgba(255,180,0,0.6)';
+        X.fillRect(sx+5,sy+TW-4,4,4);
+        X.fillRect(sx+6,sy+TW-7,2,4);
+      }
+      break;}
+    case 33: { // honeycomb shrine
+      X.fillStyle='#c07808';X.fillRect(sx,sy,TW,TW);
+      // Shrine base
+      X.fillStyle='#8a5008';X.fillRect(sx+2,sy+10,12,6);
+      X.fillStyle='#d4900a';X.fillRect(sx+3,sy+11,10,4);
+      // Honeycomb stack
+      const sc=G.hiveOfferings||0;
+      for(let hi=0;hi<Math.min(sc,5);hi++){
+        X.fillStyle=hi%2?'#f8c820':'#e8a810';
+        X.fillRect(sx+4,sy+7-hi*2,8,3);
+        X.fillStyle='rgba(255,200,0,0.4)';X.fillRect(sx+5,sy+7-hi*2,6,1);
+      }
+      // Shrine top ornament (glowing if full)
+      X.fillStyle=sc>=5?'#fff080':'#c8a020';
+      X.fillRect(sx+6,sy+1,4,4);
+      if(sc>=5){X.fillStyle='rgba(255,255,100,0.5)';X.fillRect(sx+4,sy-1,8,8);}
+      // Frame
+      X.fillStyle='#8a5008';X.fillRect(sx+1,sy+1,14,3);X.fillRect(sx+1,sy,3,10);X.fillRect(sx+12,sy,3,10);
+      break;}
   }
 }
 
@@ -1750,7 +1866,7 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 // WORLD DRAW
 // ═══════════════════════════════════════════════
-const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT'};
+const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE'};
 
 function snapPlayerToTile(){
   const p=G.player;
@@ -1829,18 +1945,28 @@ function drawWorld(){
     X.fillStyle='#50a028';X.fillRect(0,0,480,432);
   } else if(G.zone===2){
     X.fillStyle='#4888b8';X.fillRect(0,0,480,432);
+  } else if(G.zone==='hive'){
+    // Flower field sky — bright sunny yellow-blue gradient
+    X.fillStyle='#80d8ff';X.fillRect(0,0,480,432);
+    X.fillStyle='rgba(255,230,80,0.18)';X.fillRect(0,200,480,232);
+    // Floating pollen particles
+    for(let i=0;i<20;i++){
+      X.fillStyle='rgba(255,220,50,0.5)';
+      const px=((i*73+G.tick*0.3)%490)-10;
+      const py=30+(i*41+Math.sin(G.tick*0.04+i)*12)%340;
+      X.fillRect(px,py,3,3);
+    }
   } else {
     X.fillStyle=G.zone==='high'?'#6ee8ff':'#180828';X.fillRect(0,0,480,432);
-    if(G.zone==='high'){
-      for(let i=0;i<10;i++){
-        X.fillStyle=i%2?'rgba(255,255,255,0.45)':'rgba(255,255,140,0.28)';
-        X.fillRect(((i*91-G.tick*0.4)%560)-80,34+i*36,92,14);
-        X.fillRect(((i*91-G.tick*0.4)%560)-64,26+i*36,46,18);
-      }
-    }
   }
 
   if(G.zone==='high'){
+    // Clouds drawn before trunks/tiles so they appear behind platforms
+    for(let i=0;i<10;i++){
+      X.fillStyle=i%2?'rgba(255,255,255,0.45)':'rgba(255,255,140,0.28)';
+      X.fillRect(((i*91-G.tick*0.4)%560)-80,34+i*36,92,14);
+      X.fillRect(((i*91-G.tick*0.4)%560)-64,26+i*36,46,18);
+    }
     [[6,12],[15,9],[24,12],[9,3],[20,2]].forEach(([tx,top])=>{
       const sx=tx*TW-camX,sy=top*TW-camY;
       X.fillStyle='#8a4a20';X.fillRect(sx-12,sy+40,24,520);
@@ -1865,11 +1991,15 @@ function drawWorld(){
 
   // NPC trainers
   drawNPCs(X, camX, camY);
+  // Escort cutscene NPC
+  if(G.escort&&G.escort.active) drawEscortNPC(camX,camY);
 
   drawPlayer(X,p.visX-camX,p.visY-camY,p.dir,p.frame,inWater);
 
   // Pig search animation (runs over world, player frozen)
   if(G.pig.searching) updatePig(camX, camY);
+  // Escort cutscene update
+  if(G.escort&&G.escort.active) updateEscort();
 
   // Hints - shown above bottom-left HUD, right-justified to avoid overlap
   const ptx=Math.round(p.x/TW),pty=Math.round(p.y/TW);
@@ -1955,7 +2085,7 @@ function startBattleTransition(){
 }
 
 function wildEncounterPool(zone){
-  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly&&!BUGS[id].fruitOnly);
+  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly&&!BUGS[id].fruitOnly&&!BUGS[id].shrineOnly);
 }
 
 function chooseWildEncounterId(zone){
@@ -1992,13 +2122,22 @@ function checkFruitTree(tx,ty){
   G.fruitTrees.checked[key]=true;
   const roll=Math.random();
   if(roll<1/8){
-    const inst=newCaughtInstance('cocoon',Math.max(2,zoneLevel(1).min));
-    const dest=addBugToCollection(inst);
+    // Monarch cocoon → bag
+    G.inventory.cocoon=(G.inventory.cocoon||0)+1;
+    G.inventory.cocoonSteps=(G.inventory.cocoonSteps||0); // steps tracked separately
     G.seen.add('cocoon');
-    G.pcMsg=`A COCOON was tucked\nunder a leaf!\nIt went to your ${dest==='storage'?'aquarium':'party'}.`;
+    G.pcMsg='A COCOON was tucked\nunder a leaf!\nAdded to your bag.';
     G.pcMsgTimer=230;
     sfx('caught_jingle');
-  } else if(roll<1/8+1/6){
+  } else if(roll<2/8){
+    // Silkworm cocoon → bag (1-in-8 chance)
+    G.inventory.silkCocoon=(G.inventory.silkCocoon||0)+1;
+    G.inventory.silkCocoonSteps=(G.inventory.silkCocoonSteps||0);
+    G.seen.add('silkcocoon');
+    G.pcMsg='A strange white COCOON\nfell from the branch!\nAdded to your bag.';
+    G.pcMsgTimer=230;
+    sfx('caught_jingle');
+  } else if(roll<3/8){
     G.inventory.wildFruit=(G.inventory.wildFruit||0)+1;
     G.pcMsg=`Found wild fruit!\n(Have: ${G.inventory.wildFruit})`;
     G.pcMsgTimer=180;
@@ -2010,26 +2149,87 @@ function checkFruitTree(tx,ty){
   }
 }
 
-function hatchCocoon(inst){
-  inst.id='monarch';
-  inst.nickname=inst.nickname||null;
-  inst.stepsHeld=0;
-  inst.moves=BUGS.monarch.moves.slice(0,4);
-  inst.maxHp=levelStats('monarch',inst.level).hp;
-  inst.hp=inst.maxHp;
-  G.seen.add('monarch');
-  G.pcMsg='Your COCOON cracked open!\nIt became a MONARCH!';
-  G.pcMsgTimer=260;
-  sfx('levelup');
+function drawHatch(){
+  const h=G.pendingHatch;
+  if(!h){G.screen='world';return;}
+  const isMonarch=h.species==='monarch';
+  const fromName=isMonarch?'COCOON':'SILK COCOON';
+  const toName=isMonarch?'MONARCH':'SILK MOTH';
+  const toId=isMonarch?'monarch':'silkmoth';
+
+  // Animated sparkle bg
+  X.fillStyle='#0e1030';X.fillRect(0,0,480,432);
+  for(let i=0;i<60;i++){
+    const tt=G.tick*0.4+i*9;
+    const hue=(i*20+G.tick*3)%360;
+    X.fillStyle=`hsl(${hue},100%,70%)`;
+    const sz=(i%3)+1;
+    X.fillRect(((i*83+tt)|0)%480,((i*53+tt*0.7)|0)%432,sz,sz);
+  }
+  panel(24,40,432,348,'#f8f8e8');
+  T('IT HATCHED!',240,80,10,'#c02828','center');
+  X.fillStyle='#c02828';X.fillRect(60,86,360,3);
+
+  // Split panel: cocoon left → bug right
+  const prog=Math.min(1,(G.tick-(h.startTick||0))/60);
+  if(!h.startTick) h.startTick=G.tick;
+
+  // Left: cocoon
+  X.fillStyle='rgba(200,180,140,0.3)';X.fillRect(40,100,180,220);
+  T(fromName,130,118,5,'#907060','center');
+  if(isMonarch) spCocoon(X,130,220,3,false);
+  else spSilkCocoon(X,130,220,3,false);
+
+  // Arrow
+  const aw=Math.round(prog*60);
+  X.fillStyle='#c02828';
+  X.fillRect(224,215,aw,6);
+  if(aw>10){X.beginPath();X.moveTo(224+aw,212);X.lineTo(224+aw+10,218);X.lineTo(224+aw,224);X.closePath();X.fill();}
+
+  // Right: new bug (fade in)
+  X.globalAlpha=prog;
+  X.fillStyle='rgba(100,180,240,0.3)';X.fillRect(260,100,180,220);
+  T(toName,350,118,5,'#304060','center');
+  drawBug(X,toId,350,220,3.0);
+  X.globalAlpha=1;
+
+  T('Added to your aquarium!',240,340,6,'#607080','center');
+
+  if(prog>=1){
+    BTN(160,360,160,26,'✓ AMAZING!',()=>{
+      sfx('catch');
+      // Add hatched bug to storage
+      const inst=newCaughtInstance(toId,Math.max(3,zoneLevel(1).min+2));
+      G.storage.push(inst);
+      G.seen.add(toId);
+      G.pendingHatch=null;
+      G.screen='world';
+    });
+  }
 }
 
 function countBugStep(){
-  (G.loadout||[]).forEach(inst=>{
-    if(inst.id==='cocoon'){
-      inst.stepsHeld=(inst.stepsHeld||0)+1;
-      if(inst.stepsHeld>=1000)hatchCocoon(inst);
+  // Bag cocoons — track steps in inventory
+  if((G.inventory.cocoon||0)>0){
+    G.inventory.cocoonSteps=(G.inventory.cocoonSteps||0)+1;
+    if(G.inventory.cocoonSteps>=1000){
+      G.inventory.cocoon--;
+      G.inventory.cocoonSteps=0;
+      G.pendingHatch={species:'monarch'};
+      G.screen='hatch';
+      sfx('levelup');
     }
-  });
+  }
+  if((G.inventory.silkCocoon||0)>0){
+    G.inventory.silkCocoonSteps=(G.inventory.silkCocoonSteps||0)+1;
+    if(G.inventory.silkCocoonSteps>=1000){
+      G.inventory.silkCocoon--;
+      G.inventory.silkCocoonSteps=0;
+      G.pendingHatch={species:'silkmoth'};
+      G.screen='hatch';
+      sfx('levelup');
+    }
+  }
 }
 
 function doPortal(tx,ty){
@@ -2041,6 +2241,9 @@ function doPortal(tx,ty){
   else if(G.zone===2&&ty===1){G.zone=1;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(1);sfx('portal');onEnterZone(1);}
   else if(G.zone===2&&ty===TALL-2){G.zone=3;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(3);sfx('portal');}
   else if(G.zone===3&&ty===1){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(2);sfx('portal');onEnterZone(2);}
+  else if(G.zone===3&&tx<=1){G.zone='hive';resetMap('hive');p.x=(WIDE-3)*TW;p.y=13*TW;p.dir=3;sfx('portal');
+    G.pcMsg='You step through\ninto THE HIVE.\nFlowers everywhere.\nBuzzing in the air.';G.pcMsgTimer=240;}
+  else if(G.zone==='hive'&&tx>=WIDE-2){G.zone=3;p.x=2*TW;p.y=14*TW;p.dir=1;resetMap(3);sfx('portal');}
   p.visX=p.x; p.visY=p.y;
   G.moveDelay=14;
 }
@@ -2164,7 +2367,7 @@ function recoverAfterWhiteout(){
 // ═══════════════════════════════════════════════
 // BATTLE
 // ═══════════════════════════════════════════════
-const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'}};
+const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'},hive:{sky:'#f8e840',hor:'#f0c010',gnd:'#50a028',gnd2:'#70c848',plat:'#d4a820'}};
 // Draw a bug net (handle + hoop + mesh bag) at position (cx,cy), rotated by angle.
 // cx,cy = centre of the hoop. angle = rotation of the whole tool (0 = handle pointing left).
 function drawBugNet(ctx, cx, cy, angle, meshOpen){
@@ -2676,15 +2879,25 @@ function chooseEnemyMove(bug){
 }
 function movePowerText(moveName){
   const m=MOVES[moveName];
-  if(!m)return 'Power --';
-  return m.p>0?'Power '+m.p:'Status';
+  if(!m)return '--';
+  if(m.p>0){
+    // Show damage range: base ±1 variance (roll = p + rand(4) - 1, so min=p-1, max=p+2)
+    const lo=Math.max(1,m.p-1), hi=m.p+2;
+    return 'Pwr '+lo+'–'+hi;
+  }
+  return 'Status';
+}
+function moveAccText(moveName){
+  const m=MOVES[moveName];
+  if(!m||m.p<=0)return '';
+  return 'Acc '+Math.round((m.a||1)*100)+'%';
 }
 function moveEffectText(moveName){
   const m=MOVES[moveName];
   if(!m)return 'Unknown move.';
   const bits=[];
   if(m.t)bits.push(m.t+' type');
-  if(m.p>0)bits.push('accuracy '+Math.round((m.a||1)*100)+'%');
+  if(m.p>0)bits.push('Acc '+Math.round((m.a||1)*100)+'%');
   if(m.e==='def+')bits.push('raises DEF');
   if(m.e==='spd+')bits.push('raises SPD');
   if(m.e==='evade')bits.push('raises evasion');
@@ -2738,17 +2951,28 @@ function drawMoveLearn(){
   T(ml.move,240,94,10,'#c02828','center');
   drawBug(X,inst.id,92,150,2.5);
   drawTypeBadge(150,122,MOVES[ml.move].t||b.type);
-  T(movePowerText(ml.move),206,134,7,'#303848');
+  // New move stats
+  const newM=MOVES[ml.move];
+  const newPwr=movePowerText(ml.move);
+  const newAcc=newM&&newM.p>0?'  Acc '+Math.round((newM.a||1)*100)+'%':'';
+  T(newPwr+newAcc,206,134,6,'#303848');
   T(moveEffectText(ml.move),150,154,5,'#506070');
-  T(`Current Lv.${inst.level}  HP ${inst.hp}/${ns.hp}  ATK ${ns.atk}  DEF ${ns.def}  SPD ${ns.spd}`,150,174,5,'#607080');
+  T(`Lv.${inst.level}  HP ${inst.hp}/${ns.hp}  ATK ${ns.atk}  DEF ${ns.def}  SPD ${ns.spd}`,150,174,5,'#607080');
   T('Choose a move to replace:',240,206,6,'#303848','center');
   const moves=inst.moves&&inst.moves.length?inst.moves:BUGS[inst.id].moves.slice(0,4);
   moves.forEach((mv,i)=>{
-    const x=52+(i%2)*190,y=226+Math.floor(i/2)*58;
-    X.fillStyle='#e8e0d0';X.fillRect(x,y,176,48);X.strokeStyle='#607080';X.strokeRect(x,y,176,48);
-    T(mv,x+8,y+16,5,'#303848');
-    T(movePowerText(mv)+' → '+movePowerText(ml.move),x+8,y+31,4,'#506070');
-    BTN(x+112,y+14,56,22,'REPLACE',()=>replaceMoveLearn(i));
+    const x=52+(i%2)*190,y=226+Math.floor(i/2)*62;
+    const cm=MOVES[mv];
+    X.fillStyle='#e8e0d0';X.fillRect(x,y,176,54);X.strokeStyle='#607080';X.strokeRect(x,y,176,54);
+    T(mv,x+8,y+14,5,'#303848');
+    // Current move stats
+    const cPwr=movePowerText(mv);
+    const cAcc=cm&&cm.p>0?'  Acc '+Math.round((cm.a||1)*100)+'%':'';
+    const cType=cm&&cm.t?'  '+cm.t:'';
+    T(cPwr+cAcc+cType,x+8,y+27,4,'#607080');
+    // Arrow to new
+    T('→ '+newPwr+newAcc+(newM&&newM.t?'  '+newM.t:''),x+8,y+40,4,'#3060a0');
+    BTN(x+112,y+16,56,22,'REPLACE',()=>replaceMoveLearn(i));
   });
   if(moves.length<4)BTN(152,348,176,28,'ADD MOVE',()=>replaceMoveLearn(-1));
   BTN(152,374,176,24,'KEEP OLD MOVES',()=>finishMoveLearn());
@@ -3067,6 +3291,7 @@ function doZAction(allowRake=true){
   if(ftile===13)tryTalkDesk();
   if(ftile===26){openBugHolder();return;}
   if(ftile===28){checkFruitTree(tx+ddx,ty+ddy);return;}
+  if(ftile===33){interactHiveShrine();return;}
   if(interactWithFacingNPC())return;
 }
 function interactWithFacingNPC(){
@@ -3113,6 +3338,133 @@ function checkUnlocks(){
     G.unlockedZones.add(2);G.unlockedZones.add(3);resetMap(2);
     G.unlockMsg='Zone 2 cleared!\nMUSHROOM HOLLOW unlocked.\nHead south!';
     G.screen='unlock';
+  } else if(z===3 && zoneCleared(3) && !G.unlockedZones.has('hive')){
+    G.unlockedZones.add('hive');resetMap(3);
+    startEscort();
+  }
+}
+
+// ═══════════════════════════════════════════════
+// ESCORT CUTSCENE — Jesse leads player to hive
+// ═══════════════════════════════════════════════
+// Jesse will walk a path west across zone 3 and stop at the left wall portal
+const ESCORT_PATH=[
+  // [tx, ty] waypoints — Jesse walks west along row 22 to left edge
+  {tx:14,ty:22},{tx:10,ty:22},{tx:6,ty:22},{tx:3,ty:22},{tx:2,ty:14},{tx:1,ty:14}
+];
+
+function startEscort(){
+  const jesse=NPCS.find(n=>n.name==='RIVAL JESSE');
+  G.escort={
+    active:true, phase:'dialog', timer:0, step:0,
+    escortX:(jesse?jesse.tx:14)*TW, escortY:(jesse?jesse.ty:18)*TW,
+    targetX:(jesse?jesse.tx:14)*TW, targetY:(jesse?jesse.ty:18)*TW,
+    npcSprite:'rival'
+  };
+  // Add left-wall hive portal to zone 3
+  const map3=getMap(3);
+  map3[14][1]=6; map3[13][1]=6;
+  G.pcMsg='RIVAL JESSE:\n"Wait... you hear that?\nFollow me — I know\nwhat\'s over there."';
+  G.pcMsgTimer=300;
+}
+
+function updateEscort(){
+  const e=G.escort;
+  if(!e||!e.active) return;
+
+  if(e.phase==='dialog'){
+    // Wait for dialog to dismiss
+    if(G.pcMsgTimer<=0) e.phase='walk';
+    return;
+  }
+
+  if(e.phase==='walk'){
+    e.timer++;
+    // Move Jesse toward current waypoint
+    const wp=ESCORT_PATH[e.step];
+    if(!wp){e.phase='arrive';return;}
+    const wpX=wp.tx*TW, wpY=wp.ty*TW;
+    const spd=1.4;
+    const dx=wpX-e.escortX, dy=wpY-e.escortY;
+    if(Math.abs(dx)<spd && Math.abs(dy)<spd){
+      e.escortX=wpX; e.escortY=wpY;
+      e.step++;
+    } else {
+      e.escortX+=Math.sign(dx)*spd;
+      e.escortY+=Math.sign(dy)*spd;
+    }
+    // Force player to follow Jesse, staying 3–4 tiles behind
+    const targetPX=e.escortX+4*TW;
+    const targetPY=e.escortY;
+    const pdx=targetPX-G.player.x, pdy=targetPY-G.player.y;
+    if(Math.abs(pdx)>TW||Math.abs(pdy)>TW){
+      if(Math.abs(pdx)>Math.abs(pdy)){
+        G.player.x+=Math.sign(pdx)*TW;
+        G.player.dir=pdx<0?3:1;
+      } else {
+        G.player.y+=Math.sign(pdy)*TW;
+        G.player.dir=pdy<0?0:2;
+      }
+      G.player.visX=G.player.x;
+      G.player.visY=G.player.y;
+      G.player.frame++;
+    }
+    // Check if Jesse reached portal
+    if(e.step>=ESCORT_PATH.length){e.phase='arrive';}
+    return;
+  }
+
+  if(e.phase==='arrive'){
+    e.active=false;
+    G.pcMsg='RIVAL JESSE:\n"I can hear buzzing\nthrough that wall.\nGo on — THE HIVE\nawaits you."';
+    G.pcMsgTimer=300;
+  }
+}
+
+function drawEscortNPC(camX, camY){
+  const e=G.escort;
+  if(!e||!e.active) return;
+  const sx=e.escortX-camX;
+  const sy=e.escortY-camY;
+  if(sx<-32||sx>512||sy<-32||sy>464) return;
+  drawNPCSprite(X,sx,sy,e.npcSprite||'rival',3,false);
+}
+
+// ── Hive shrine interaction ──
+function interactHiveShrine(){
+  const honeyCount=G.loadout.concat(G.storage||[]).filter(i=>i.id==='honeybee').length;
+  const needed=5-(G.hiveOfferings||0);
+  if(needed<=0){
+    // Already complete — queen bee already given
+    G.pcMsg='The shrine glows golden.\nYou already received\nthe QUEEN BEE\'s blessing.';
+    G.pcMsgTimer=200;
+    return;
+  }
+  if(honeyCount<=0){
+    G.pcMsg=`HONEYCOMB SHRINE:\n"Bring HONEYBEE offerings.\nNeeded: ${needed} more."`;
+    G.pcMsgTimer=200;
+    return;
+  }
+  // Offer one honeybee at a time from storage first, then loadout
+  let removed=false;
+  for(const pool of [G.storage,G.loadout]){
+    const idx=pool.findIndex(i=>i.id==='honeybee');
+    if(idx>=0){pool.splice(idx,1);removed=true;break;}
+  }
+  if(!removed) return;
+  G.hiveOfferings=(G.hiveOfferings||0)+1;
+  sfx('buff');
+  if(G.hiveOfferings>=5){
+    // Grant queen bee
+    const inst=newCaughtInstance('queenbee',12);
+    G.storage.push(inst);
+    G.seen.add('queenbee');
+    sfx('caught_jingle');
+    G.pcMsg='The shrine erupts in gold!\nA QUEEN BEE emerges\nfrom the comb!\nShe joined your aquarium.';
+    G.pcMsgTimer=300;
+  } else {
+    G.pcMsg=`Offering accepted!\n${G.hiveOfferings}/5 Honeybees placed.\nNeeded: ${5-G.hiveOfferings} more.`;
+    G.pcMsgTimer=200;
   }
 }
 
@@ -3271,6 +3623,8 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
   ctx.save();
   if(key==='specialMushroom'){drawMushroomSprite(ctx,cx,cy,s);ctx.restore();return;}
   if(key==='lakeRake'){drawRakeSprite(ctx,cx,cy,s);ctx.restore();return;}
+  if(key==='cocoon'){spCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
+  if(key==='silkCocoon'){spSilkCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
   if(key==='wildFruit'){
     ctx.fillStyle='#1f7a28';ctx.fillRect(cx-2*s,cy-18*s,4*s,7*s);
     ctx.fillStyle='#55b83a';ctx.fillRect(cx+2*s,cy-18*s,9*s,5*s);
@@ -3306,6 +3660,8 @@ function drawBag(){
     {key:'lakeRake',      label:'Lake Weed Rake',   qty: inv.lakeRake ? 1 : 0,     desc:'Press Z (or tap Z on mobile)\nwhile standing in water to rake.',       hasIt: !!inv.lakeRake},
     {key:'specialMushroom',label:'Mystery Truffle',  qty: inv.specialMushroom||0,   desc:'A truffle sniffed out by the pig.\nSmells... interesting.', hasIt: (inv.specialMushroom||0)>0},
     {key:'wildFruit',      label:'Wild Fruit',        qty: inv.wildFruit||0,         desc:'Fruit shaken loose from Mossy\nWoods trees.',             hasIt: (inv.wildFruit||0)>0},
+    {key:'cocoon',         label:'Cocoon',            qty: inv.cocoon||0,            desc:`Walk 1000 steps to hatch into a MONARCH.\nSteps: ${inv.cocoonSteps||0} / 1000`, hasIt: (inv.cocoon||0)>0},
+    {key:'silkCocoon',     label:'Silk Cocoon',       qty: inv.silkCocoon||0,        desc:`Walk 1000 steps to hatch into a SILK MOTH.\nSteps: ${inv.silkCocoonSteps||0} / 1000`, hasIt: (inv.silkCocoon||0)>0},
     {key:'lakeWeed',      label:'Lake Weed',         qty: inv.lakeWeed||0,          desc:'Clumps of pond weed. Maybe useful.',         hasIt: (inv.lakeWeed||0)>0},
     {key:'shinyRock',     label:'Shiny Rock',        qty: inv.shinyRock||0,         desc:'A smooth glittery rock.',                    hasIt: (inv.shinyRock||0)>0},
     {key:'scrapMetal',    label:'Scrap Metal',       qty: inv.scrapMetal||0,        desc:'Rusted metal bits from the pond.',           hasIt: (inv.scrapMetal||0)>0},
@@ -3603,6 +3959,7 @@ function loop(){
     case 'reward':  drawReward(); break;
     case 'gear':    drawGear();   break;
     case 'bag':     drawBag();    break;
+    case 'hatch':   drawHatch();  break;
   }
   requestAnimationFrame(loop);
 }
@@ -4617,6 +4974,17 @@ const NPCS = [
     rewardId:'pillbug', defeated:false},
   {zone:3, tx:20, ty:20, dir:3, sprite:'pig', name:'TRUFFLE PIG',
     isPig:true, defeated:false},
+  // ── The Hive ──
+  {zone:'hive', tx:8, ty:8, dir:2, sprite:'scout', name:'BEE KEEPER NORA',
+    intro:"You can hear it, right?\nThe whole meadow\nis their territory.",
+    afterMsg:"You've got a knack\nfor this. Keep going.",
+    team:[{id:'yellowjacket',lvl:10},{id:'honeybee',lvl:11},{id:'hornet',lvl:12}],
+    rewardId:null, defeated:false},
+  {zone:'hive', tx:22, ty:16, dir:3, sprite:'angler', name:'BEEKEEPER AUGUST',
+    intro:"The hive queen watches.\nProve you belong here.",
+    afterMsg:"The shrine... did you\nfind it yet?",
+    team:[{id:'honeybee',lvl:11},{id:'hornet',lvl:12},{id:'yellowjacket',lvl:13}],
+    rewardId:null, defeated:false},
 ];
 function getNPCAt(zone, tx, ty){
   return NPCS.find(n => n.zone===zone && n.tx===tx && n.ty===ty);
@@ -5707,6 +6075,244 @@ SFN.boatman = spBoatman;
 SFN.diver = spDiver;
 SFN.mayfly = spMayfly;
 SFN.pillbug = spPillbug;
+
+// ─── SILK COCOON ───
+function spSilkCocoon(c,cx,cy,s,f){
+  c.save();
+  const o=cx-8*s,t=cy-14*s;
+  // Silky white/cream oval cocoon with thread wraps
+  PX(c,o,t, 2,0, 12,26,'#e8e0d0',s);
+  PX(c,o,t, 0,5, 16,16,'#f8f4ec',s);
+  PX(c,o,t, 1,3, 14,20,'#f0ece4',s);
+  // Thread lines - criss-cross pattern
+  for(let i=0;i<5;i++){PX(c,o,t, 1,3+i*4, 14,1,'#c8c0b4',s);}
+  for(let i=0;i<4;i++){PX(c,o,t, 2+i*3,2, 1,22,'#d0c8bc',s);}
+  // Sheen highlight
+  PX(c,o,t, 3,3, 4,8,'rgba(255,255,255,0.6)',s);
+  // Silk threads dangling
+  PX(c,o,t, 5,-3, 1,3,'#c8c0b4',s);
+  PX(c,o,t, 9,-4, 1,4,'#c8c0b4',s);
+  c.restore();
+}
+// ─── SILK MOTH ───
+function spSilkMoth(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-14*s,t=cy-12*s;
+  // Wings - 4 wings, creamy white with brown eye-spots
+  // Upper wings
+  c.fillStyle='rgba(248,244,236,0.9)';
+  c.fillRect(Math.round(o-4*s),Math.round(t+2*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(18*s)));
+  c.fillRect(Math.round(o+16*s),Math.round(t+2*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(18*s)));
+  // Lower wings
+  c.fillStyle='rgba(240,234,220,0.85)';
+  c.fillRect(Math.round(o-2*s),Math.round(t+14*s),Math.max(1,Math.round(14*s)),Math.max(1,Math.round(12*s)));
+  c.fillRect(Math.round(o+16*s),Math.round(t+14*s),Math.max(1,Math.round(14*s)),Math.max(1,Math.round(12*s)));
+  // Wing veins
+  c.fillStyle='rgba(180,170,155,0.6)';
+  c.fillRect(Math.round(o+2*s),Math.round(t+4*s),Math.max(1,Math.round(10*s)),1);
+  c.fillRect(Math.round(o+2*s),Math.round(t+10*s),Math.max(1,Math.round(10*s)),1);
+  c.fillRect(Math.round(o+16*s),Math.round(t+4*s),Math.max(1,Math.round(10*s)),1);
+  c.fillRect(Math.round(o+16*s),Math.round(t+10*s),Math.max(1,Math.round(10*s)),1);
+  // Eye spots on upper wings (distinctive silk moth feature)
+  c.fillStyle='#8a6040';
+  c.beginPath();c.arc(Math.round(o+5*s),Math.round(t+9*s),3*s,0,Math.PI*2);c.fill();
+  c.beginPath();c.arc(Math.round(o+23*s),Math.round(t+9*s),3*s,0,Math.PI*2);c.fill();
+  c.fillStyle='#e8d0a0';
+  c.beginPath();c.arc(Math.round(o+5*s),Math.round(t+9*s),1.5*s,0,Math.PI*2);c.fill();
+  c.beginPath();c.arc(Math.round(o+23*s),Math.round(t+9*s),1.5*s,0,Math.PI*2);c.fill();
+  // Body - fat furry white body
+  PX(c,o,t, 11,4, 6,18,'#e0d8cc',s);
+  PX(c,o,t, 12,4, 4,18,'#f4f0e8',s);
+  // Fuzzy head
+  PX(c,o,t, 10,0, 8,6,'#d8d0c4',s);
+  PX(c,o,t, 11,0, 6,4,'#f0ece4',s);
+  // Eyes
+  PX(c,o,t, 11,1, 2,2,'#1a1010',s);
+  PX(c,o,t, 15,1, 2,2,'#1a1010',s);
+  // Fluffy antennae (feathery - silkmoth signature)
+  PX(c,o,t, 10,-4, 1,4,'#8a7860',s);
+  PX(c,o,t, 17,-4, 1,4,'#8a7860',s);
+  PX(c,o,t, 7,-5, 3,1,'#8a7860',s);
+  PX(c,o,t, 8,-6, 5,1,'#8a7860',s);
+  PX(c,o,t, 18,-5, 3,1,'#8a7860',s);
+  PX(c,o,t, 15,-6, 5,1,'#8a7860',s);
+  c.restore();
+}
+SFN.silkcocoon = spSilkCocoon;
+SFN.silkmoth = spSilkMoth;
+
+// ─── YELLOW JACKET WASP ───
+function spYellowjacket(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-9*s,t=cy-13*s;
+  // Wings
+  c.fillStyle='rgba(220,240,255,0.65)';
+  c.fillRect(Math.round(o-8*s),Math.round(t+2*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(9*s)));
+  c.fillRect(Math.round(o-6*s),Math.round(t+9*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(7*s)));
+  c.fillRect(Math.round(o+14*s),Math.round(t+2*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(9*s)));
+  c.fillRect(Math.round(o+14*s),Math.round(t+9*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(7*s)));
+  // Body — bright yellow/black stripes, thin waist
+  PX(c,o,t, 5,16, 8,8,'#f8d010',s);   // abdomen
+  PX(c,o,t, 4,17, 10,1,'#181818',s); PX(c,o,t, 4,19, 10,1,'#181818',s);
+  PX(c,o,t, 4,21, 10,1,'#181818',s); PX(c,o,t, 4,23, 10,1,'#181818',s);
+  PX(c,o,t, 6,14, 6,3,'#181818',s);   // thin waist
+  PX(c,o,t, 5,8, 8,7,'#f8d010',s);    // thorax
+  PX(c,o,t, 5,8, 8,2,'#181818',s);    // thorax band
+  // Head
+  PX(c,o,t, 6,2, 6,6,'#181818',s);
+  PX(c,o,t, 7,3, 4,4,'#f8d010',s);
+  PX(c,o,t, 7,3, 2,2,'#181818',s); PX(c,o,t,11,3, 2,2,'#181818',s);
+  // Antennae
+  PX(c,o,t, 7,-2, 1,4,'#181818',s); PX(c,o,t,10,-2, 1,4,'#181818',s);
+  PX(c,o,t, 5,-3, 2,1,'#181818',s); PX(c,o,t,11,-3, 2,1,'#181818',s);
+  // Stinger
+  PX(c,o,t, 8,24, 2,3,'#181818',s);
+  // Legs
+  PX(c,o,t,-2,10, 7,1,'#181818',s); PX(c,o,t,-3,12, 5,1,'#181818',s);
+  PX(c,o,t,13,10, 7,1,'#181818',s); PX(c,o,t,16,12, 5,1,'#181818',s);
+  c.restore();
+}
+
+// ─── HORNET ───
+function spHornet(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-11*s,t=cy-14*s;
+  // Wings - large
+  c.fillStyle='rgba(200,230,255,0.60)';
+  c.fillRect(Math.round(o-10*s),Math.round(t+2*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(11*s)));
+  c.fillRect(Math.round(o-8*s),Math.round(t+10*s),Math.max(1,Math.round(13*s)),Math.max(1,Math.round(8*s)));
+  c.fillRect(Math.round(o+16*s),Math.round(t+2*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(11*s)));
+  c.fillRect(Math.round(o+17*s),Math.round(t+10*s),Math.max(1,Math.round(13*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='rgba(255,210,0,0.3)';
+  c.fillRect(Math.round(o-8*s),Math.round(t+4*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(2*s)));
+  c.fillRect(Math.round(o+18*s),Math.round(t+4*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(2*s)));
+  // Large abdomen — brown/yellow/black
+  PX(c,o,t, 5,16, 12,12,'#e87010',s);
+  PX(c,o,t, 4,17, 14,10,'#f09020',s);
+  PX(c,o,t, 5,16, 12,2,'#181818',s);
+  PX(c,o,t, 4,20, 14,2,'#181818',s);
+  PX(c,o,t, 5,24, 12,2,'#181818',s);
+  PX(c,o,t, 5,26, 12,2,'#e87010',s);
+  // Waist
+  PX(c,o,t, 8,14, 6,3,'#181818',s);
+  // Thorax — large, orange-brown
+  PX(c,o,t, 5,7, 12,8,'#c05808',s);
+  PX(c,o,t, 6,7, 10,6,'#e07010',s);
+  PX(c,o,t, 6,7, 10,2,'#181818',s);
+  // Head — large
+  PX(c,o,t, 7,1, 8,7,'#181818',s);
+  PX(c,o,t, 8,2, 6,5,'#f09020',s);
+  PX(c,o,t, 8,2, 3,3,'#181818',s); PX(c,o,t,11,2, 3,3,'#181818',s);
+  // Mandibles
+  PX(c,o,t, 7,6, 3,2,'#c05808',s); PX(c,o,t,12,6, 3,2,'#c05808',s);
+  // Antennae
+  PX(c,o,t, 9,-3, 1,4,'#181818',s); PX(c,o,t,12,-3, 1,4,'#181818',s);
+  PX(c,o,t, 7,-4, 2,1,'#181818',s); PX(c,o,t,13,-4, 2,1,'#181818',s);
+  // Stinger
+  PX(c,o,t, 9,28, 4,3,'#181818',s);
+  PX(c,o,t,10,30, 2,2,'#c05808',s);
+  // Legs
+  PX(c,o,t,-3,9, 9,1,'#181818',s); PX(c,o,t,-4,12, 7,1,'#181818',s); PX(c,o,t,-3,15, 7,1,'#181818',s);
+  PX(c,o,t,16,9, 9,1,'#181818',s); PX(c,o,t,19,12, 7,1,'#181818',s); PX(c,o,t,18,15, 7,1,'#181818',s);
+  c.restore();
+}
+
+// ─── HONEYBEE ───
+function spHoneybee(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-9*s,t=cy-11*s;
+  // Wings — 4, rounder than wasp
+  c.fillStyle='rgba(220,245,255,0.60)';
+  c.fillRect(Math.round(o-7*s),Math.round(t+2*s),Math.max(1,Math.round(11*s)),Math.max(1,Math.round(9*s)));
+  c.fillRect(Math.round(o-5*s),Math.round(t+9*s),Math.max(1,Math.round(9*s)),Math.max(1,Math.round(7*s)));
+  c.fillRect(Math.round(o+14*s),Math.round(t+2*s),Math.max(1,Math.round(11*s)),Math.max(1,Math.round(9*s)));
+  c.fillRect(Math.round(o+14*s),Math.round(t+9*s),Math.max(1,Math.round(9*s)),Math.max(1,Math.round(7*s)));
+  // Golden hairy abdomen
+  PX(c,o,t, 4,13, 10,10,'#f8c010',s);
+  PX(c,o,t, 3,14, 12,8,'#f8c820',s);
+  PX(c,o,t, 4,13, 10,2,'#181818',s);
+  PX(c,o,t, 3,16, 12,2,'#181818',s);
+  PX(c,o,t, 4,19, 10,2,'#181818',s);
+  PX(c,o,t, 5,22, 8,1,'#181818',s);
+  // Fuzzy thorax
+  PX(c,o,t, 5,7, 8,7,'#d4900a',s);
+  PX(c,o,t, 4,8, 10,5,'#e8a820',s);
+  // Pollen basket on leg (distinctive honeybee feature)
+  PX(c,o,t,-2,14, 3,4,'#f8e030',s);
+  PX(c,o,t,17,14, 3,4,'#f8e030',s);
+  // Head
+  PX(c,o,t, 6,2, 6,5,'#181818',s);
+  PX(c,o,t, 7,3, 4,3,'#d4900a',s);
+  PX(c,o,t, 7,3, 2,2,'#181818',s); PX(c,o,t,10,3, 2,2,'#181818',s);
+  // Antennae
+  PX(c,o,t, 7,-2, 1,4,'#181818',s); PX(c,o,t,10,-2, 1,4,'#181818',s);
+  PX(c,o,t, 5,-3, 2,1,'#181818',s); PX(c,o,t,11,-3, 2,1,'#181818',s);
+  // Legs
+  PX(c,o,t,-2,10, 7,1,'#181818',s); PX(c,o,t,-3,12, 5,1,'#181818',s);
+  PX(c,o,t,13,10, 7,1,'#181818',s); PX(c,o,t,16,12, 5,1,'#181818',s);
+  c.restore();
+}
+
+// ─── QUEEN BEE ───
+function spQueenbee(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-16*s;
+  // Glow aura
+  c.fillStyle='rgba(255,220,0,0.25)';
+  c.fillRect(Math.round(o-6*s),Math.round(t-2*s),Math.max(1,Math.round(36*s)),Math.max(1,Math.round(36*s)));
+  // Large regal wings
+  c.fillStyle='rgba(210,240,255,0.70)';
+  c.fillRect(Math.round(o-12*s),Math.round(t+2*s),Math.max(1,Math.round(18*s)),Math.max(1,Math.round(14*s)));
+  c.fillRect(Math.round(o-10*s),Math.round(t+12*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(10*s)));
+  c.fillRect(Math.round(o+18*s),Math.round(t+2*s),Math.max(1,Math.round(18*s)),Math.max(1,Math.round(14*s)));
+  c.fillRect(Math.round(o+20*s),Math.round(t+12*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(10*s)));
+  c.fillStyle='rgba(255,230,100,0.4)';
+  c.fillRect(Math.round(o-10*s),Math.round(t+4*s),Math.max(1,Math.round(14*s)),Math.max(1,Math.round(3*s)));
+  c.fillRect(Math.round(o+20*s),Math.round(t+4*s),Math.max(1,Math.round(14*s)),Math.max(1,Math.round(3*s)));
+  // Long abdomen — elongated, golden with black bands
+  PX(c,o,t, 6,18, 12,16,'#f8c010',s);
+  PX(c,o,t, 5,19, 14,14,'#f8d020',s);
+  for(let i=0;i<5;i++) PX(c,o,t, 5,18+i*3, 14,1,'#181818',s);
+  // Elongated stinger tip
+  PX(c,o,t, 9,33, 6,4,'#181818',s);
+  PX(c,o,t,10,36, 4,3,'#c05808',s);
+  // Waist — narrow
+  PX(c,o,t, 9,15, 6,4,'#181818',s);
+  // Thorax — large, fuzzy golden
+  PX(c,o,t, 5,7, 14,9,'#d4900a',s);
+  PX(c,o,t, 4,8, 16,7,'#e8a820',s);
+  PX(c,o,t, 5,7, 14,2,'#181818',s);
+  // Crown (queen's crown!)
+  PX(c,o,t, 8,-1, 8,4,'#f8d010',s);
+  PX(c,o,t, 7,0, 10,2,'#f0b800',s);
+  PX(c,o,t, 8,-4, 2,4,'#f8d010',s); // left spike
+  PX(c,o,t,11,-4, 2,4,'#f8d010',s); // middle spike
+  PX(c,o,t,14,-3, 2,3,'#f8d010',s); // right spike
+  PX(c,o,t, 8,-4, 2,1,'#fff890',s); PX(c,o,t,11,-4, 2,1,'#fff890',s); PX(c,o,t,14,-3, 2,1,'#fff890',s);
+  // Head — large
+  PX(c,o,t, 8,2, 8,6,'#181818',s);
+  PX(c,o,t, 9,3, 6,4,'#d4900a',s);
+  PX(c,o,t, 9,3, 3,3,'#181818',s); PX(c,o,t,12,3, 3,3,'#181818',s);
+  PX(c,o,t, 9,3, 1,1,'#fff080',s); PX(c,o,t,14,3, 1,1,'#fff080',s); // eye gleam
+  // Antennae — long and elegant
+  PX(c,o,t, 9,-4, 1,6,'#181818',s); PX(c,o,t,14,-4, 1,6,'#181818',s);
+  PX(c,o,t, 6,-5, 3,1,'#181818',s); PX(c,o,t,15,-5, 3,1,'#181818',s);
+  PX(c,o,t, 5,-6, 2,1,'#181818',s); PX(c,o,t,17,-6, 2,1,'#181818',s);
+  // Legs
+  PX(c,o,t,-3,10, 9,1,'#181818',s); PX(c,o,t,-4,13, 7,1,'#181818',s); PX(c,o,t,-3,16, 7,1,'#181818',s);
+  PX(c,o,t,18,10, 9,1,'#181818',s); PX(c,o,t,21,13, 7,1,'#181818',s); PX(c,o,t,20,16, 7,1,'#181818',s);
+  c.restore();
+}
+
+SFN.yellowjacket=spYellowjacket;
+SFN.hornet=spHornet;
+SFN.honeybee=spHoneybee;
+SFN.queenbee=spQueenbee;
 
 // ═══════════════════════════════════════════════
 // DRAW TRAINER AT BATTLE SCALE
