@@ -133,7 +133,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:flex-
 // SCALING + TOUCH DETECTION
 // ═══════════════════════════════════════════════
 const C=document.getElementById('c');
-const X=C.getContext('2d');
+let X=C.getContext('2d');
 X.imageSmoothingEnabled=false;
 
 const GAME_W=480,GAME_H=432;
@@ -3868,6 +3868,9 @@ function drawTitle(){
   if(!anySlot) T('No save files found',240,366,5,'#505870','center');
   else         T('3 save slots available',240,366,5,'#608060','center');
 
+  // EDITOR button (bottom-right corner, subtle)
+  BTN(356,396,116,26,'🛠 EDITOR',()=>{ openEditor(); });
+
   drawSaveToast();
 }
 function drawUnlock(){
@@ -3960,6 +3963,8 @@ function loop(){
     case 'gear':    drawGear();   break;
     case 'bag':     drawBag();    break;
     case 'hatch':   drawHatch();  break;
+    case 'editor':       drawEditor();      break;
+    case 'editor_warp':  drawEditorWarp();  break;
   }
   requestAnimationFrame(loop);
 }
@@ -6381,6 +6386,1317 @@ function drawTrainerBattleSprite(ctx, x, y, sprite){
   }
   ctx.restore();
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// DEV EDITOR  — DOM overlay, full game canvas stays untouched
+// ═══════════════════════════════════════════════════════════════════
+
+const EDITOR_ZONES=[
+  {id:1,      label:'Mossy Woods'},
+  {id:2,      label:'Murky Pond'},
+  {id:3,      label:'Mushroom Hollow'},
+  {id:'high', label:'High High High'},
+  {id:'hive', label:'The Hive'},
+  {id:'pc',   label:'Entomology Dept'},
+];
+
+const EDITOR_TILES=[
+  {v:0,  label:'Floor',        solid:false,enc:false},
+  {v:1,  label:'Short Grass',  solid:false,enc:true},
+  {v:2,  label:'Tree / Wall',  solid:true, enc:false},
+  {v:4,  label:'Path',         solid:false,enc:false},
+  {v:5,  label:'Cabin',        solid:true, enc:false},
+  {v:6,  label:'Portal',       solid:false,enc:false},
+  {v:7,  label:'Pond',         solid:false,enc:true},
+  {v:9,  label:'Mushrooms',    solid:false,enc:true},
+  {v:11, label:'PC Door',      solid:false,enc:false},
+  {v:21, label:'Treetop',      solid:false,enc:true},
+  {v:22, label:'Sky Bridge',   solid:false,enc:false},
+  {v:27, label:'Flower Crown', solid:false,enc:true},
+  {v:28, label:'Fruit Tree',   solid:true, enc:false},
+  {v:30, label:'Flower Field', solid:false,enc:true},
+  {v:31, label:'Hive Entrance',solid:false,enc:false},
+  {v:32, label:'Hive Floor',   solid:false,enc:false},
+  {v:33, label:'Shrine',       solid:false,enc:false},
+];
+
+const CUSTOM_TILE_BASE=100;
+const CUSTOM_TILE_REG=[];
+
+const ED={
+  active:false, zone:1,
+  camX:0, camY:0,
+  zoom:1,           // 1=normal, 2/4/8=zoomed in
+  brush:0, tool:'paint', painting:false,
+  showGrid:true,
+  tab:'tiles',
+  customColor:'#8040c0', customLabel:'MyTile',
+  customSolid:false, customEnc:false,
+  _hoverTx:undefined, _hoverTy:undefined,
+  // pixel editor
+  px:{             // pixel editor state
+    open:false,
+    tileV:0,       // which tile value is being pixel-edited
+    data:null,     // ImageData or null (null = use live drawTile render)
+    selColor:'#ff0000',
+    zoom:8,        // px per pixel in pixel editor (each tile = 16×16 game pixels)
+    camX:0, camY:0,
+    painting:false,
+  },
+};
+
+let _edPan={active:false,sx:0,sy:0,cx:0,cy:0};
+const ED_MAP_W=WIDE*TW, ED_MAP_H=TALL*TW;
+
+// ── Swatch canvas (reused) ──
+const _swatchCanvas=document.createElement('canvas');
+_swatchCanvas.width=_swatchCanvas.height=TW*3;
+const _swatchCtx=_swatchCanvas.getContext('2d');
+
+function edTileSwatch(tileV, zoneId){
+  const W=TW*3;
+  _swatchCtx.clearRect(0,0,W,W);
+  _swatchCtx.fillStyle='#2a3040';
+  _swatchCtx.fillRect(0,0,W,W);
+  const _X=X, _zone=G.zone;
+  X=_swatchCtx; G.zone=zoneId;
+  for(let dy=0;dy<3;dy++) for(let dx=0;dx<3;dx++){
+    try{ drawTile(tileV,dx*TW,dy*TW,dx,dy); }catch(e){}
+  }
+  X=_X; G.zone=_zone;
+  return _swatchCanvas.toDataURL();
+}
+
+// ── Build the overlay DOM (runs once) ──
+function buildEditorDOM(){
+  if(document.getElementById('ed-overlay')) return;
+
+  const style=document.createElement('style');
+  style.textContent=`
+  #ed-overlay{
+    position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;
+    background:#111318;
+    font-family:'Courier New',monospace;
+    display:none;
+  }
+  #ed-overlay.open{display:flex;flex-direction:row;align-items:stretch;}
+  #ed-map-wrap{
+    flex:1 1 0%;min-width:0;position:relative;overflow:hidden;
+    background:#0a0c10;cursor:crosshair;
+  }
+  #ed-map-canvas{
+    position:absolute;top:0;left:0;
+    display:block;image-rendering:pixelated;
+  }
+  #ed-coords{
+    position:absolute;top:4px;left:4px;background:rgba(0,0,0,.72);
+    color:#f8e040;font-size:10px;padding:2px 7px;border-radius:3px;pointer-events:none;
+  }
+  #ed-zone-label{
+    position:absolute;top:4px;left:50%;transform:translateX(-50%);
+    background:rgba(0,0,0,.72);color:#f8e040;font-size:11px;font-weight:bold;
+    padding:2px 10px;border-radius:3px;pointer-events:none;
+  }
+  #ed-zoom-label{
+    position:absolute;top:4px;right:4px;background:rgba(0,0,0,.72);
+    color:#80c0ff;font-size:10px;padding:2px 7px;border-radius:3px;pointer-events:none;
+  }
+  #ed-panel{
+    width:340px;min-width:340px;max-width:340px;flex-shrink:0;
+    background:#16191f;display:flex;flex-direction:column;
+    border-left:2px solid #303848;overflow:hidden;
+  }
+  #ed-toolbar{
+    display:flex;gap:3px;padding:5px;background:#1c1f28;
+    border-bottom:1px solid #303848;flex-wrap:wrap;
+  }
+  .ed-btn{
+    background:#252d3f;color:#c8d8f0;border:1px solid #405070;
+    border-radius:4px;padding:3px 7px;font-size:11px;cursor:pointer;
+    font-family:inherit;transition:background .1s;white-space:nowrap;
+  }
+  .ed-btn:hover{background:#304060;}
+  .ed-btn.active{background:#3a6aaa;border-color:#80b0ff;color:#fff;}
+  .ed-btn.danger{background:#5a1a1a;border-color:#a03030;color:#ffb0b0;}
+  .ed-btn.danger:hover{background:#7a2020;}
+  .ed-btn.success{background:#1a4a1a;border-color:#40a040;color:#a0f0a0;}
+  .ed-btn.success:hover{background:#206020;}
+  .ed-btn.warn{background:#3a2a08;border-color:#a08020;color:#f0d060;}
+  .ed-tabs{display:flex;border-bottom:1px solid #303848;}
+  .ed-tab{
+    flex:1;padding:6px 2px;text-align:center;font-size:10px;cursor:pointer;
+    color:#708090;background:#141720;border:none;font-family:inherit;
+    border-bottom:2px solid transparent;transition:all .1s;
+  }
+  .ed-tab:hover{color:#c0d0e0;background:#1c2030;}
+  .ed-tab.active{color:#f8e040;background:#1c2030;border-bottom-color:#f8e040;}
+  #ed-panel-body{flex:1;overflow-y:auto;padding:8px;}
+  #ed-panel-body::-webkit-scrollbar{width:5px;}
+  #ed-panel-body::-webkit-scrollbar-thumb{background:#304050;border-radius:3px;}
+  .ed-sec{color:#809ab0;font-size:9px;letter-spacing:1px;text-transform:uppercase;margin:8px 0 4px;}
+  #ed-tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
+  .ed-tile-card{
+    background:#1e2230;border:2px solid #303848;border-radius:4px;
+    padding:4px;cursor:pointer;display:flex;flex-direction:column;align-items:center;
+    gap:2px;transition:border-color .1s;position:relative;
+  }
+  .ed-tile-card:hover{border-color:#5070a0;}
+  .ed-tile-card.sel{border-color:#80b0ff;background:#2a3a5a;}
+  .ed-tile-card img{width:54px;height:54px;image-rendering:pixelated;border-radius:2px;}
+  .ed-tile-card .tc-label{font-size:9px;color:#a0b0c0;text-align:center;line-height:1.2;}
+  .tc-badge{font-size:7px;padding:1px 3px;border-radius:2px;margin-top:1px;}
+  .tc-badge.solid{background:#5a1010;color:#ffa0a0;}
+  .tc-badge.enc{background:#0a3020;color:#80f0a0;}
+  .tc-px-btn{
+    position:absolute;bottom:2px;right:2px;
+    background:#203040;border:1px solid #405060;border-radius:2px;
+    color:#80c0ff;font-size:8px;padding:1px 3px;cursor:pointer;
+    font-family:inherit;
+  }
+  .tc-px-btn:hover{background:#304860;}
+  .ed-biome-row{display:flex;align-items:stretch;gap:6px;margin-bottom:6px;}
+  .ed-biome-btn{
+    flex:1;padding:8px;text-align:left;
+    background:#1e2230;border:2px solid #303848;border-radius:5px;
+    color:#b0c0d0;font-size:12px;cursor:pointer;font-family:inherit;
+    transition:all .1s;
+  }
+  .ed-biome-btn:hover{border-color:#5070a0;color:#e0eaf8;}
+  .ed-biome-btn.active{border-color:#f8e040;color:#f8e040;background:#1a1a0e;}
+  .ed-warp-btn{
+    padding:6px 10px;
+    background:#1a3a1a;border:1px solid #40a040;border-radius:4px;
+    color:#80f080;font-size:11px;cursor:pointer;font-family:inherit;
+    white-space:nowrap;
+  }
+  .ed-warp-btn:hover{background:#204820;}
+  .ed-color-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;margin:4px 0;}
+  .ed-csw{width:100%;aspect-ratio:1;border-radius:3px;cursor:pointer;border:2px solid transparent;}
+  .ed-csw.sel{border-color:#fff;}
+
+  /* ── Mobile: panel moves below the map ── */
+  @media (max-width: 640px) {
+    #ed-overlay.open{flex-direction:column;}
+    #ed-map-wrap{
+      flex:0 0 auto;
+      width:100%;
+      /* Maintain 480:432 (10:9) game aspect ratio */
+      aspect-ratio:480/432;
+      max-height:60vh;
+    }
+    #ed-panel{
+      width:100%;min-width:0;max-width:none;flex-shrink:0;
+      border-left:none;border-top:2px solid #303848;
+      flex:1 1 0%;
+      overflow:hidden;
+      min-height:0;
+    }
+    #ed-toolbar{padding:6px;gap:4px;}
+    .ed-btn{padding:6px 10px;font-size:12px;flex:1 1 auto;text-align:center;}
+    .ed-tab{padding:8px 4px;font-size:11px;}
+    #ed-tile-grid{grid-template-columns:repeat(4,1fr);}
+    .ed-tile-card img{width:44px;height:44px;}
+    .ed-biome-row{flex-direction:column;gap:4px;}
+    .ed-biome-btn{font-size:14px;padding:10px;}
+    .ed-warp-btn{font-size:13px;padding:10px;width:100%;text-align:center;}
+  }
+  `;
+  document.head.appendChild(style);
+
+  const ov=document.createElement('div');
+  ov.id='ed-overlay';
+
+  // ── Map area ──
+  const mapWrap=document.createElement('div');
+  mapWrap.id='ed-map-wrap';
+  const edCanvas=document.createElement('canvas');
+  edCanvas.id='ed-map-canvas';
+  const coords=document.createElement('div');
+  coords.id='ed-coords';coords.textContent='—';
+  const zoneLabel=document.createElement('div');
+  zoneLabel.id='ed-zone-label';
+  const zoomLabel=document.createElement('div');
+  zoomLabel.id='ed-zoom-label';zoomLabel.textContent='1×';
+  mapWrap.append(edCanvas,coords,zoneLabel,zoomLabel);
+
+  // ── Panel ──
+  const panel=document.createElement('div');panel.id='ed-panel';
+  const toolbar=document.createElement('div');toolbar.id='ed-toolbar';
+
+  // Tool buttons
+  const toolBtns={};
+  [['paint','🖌 Paint'],['erase','⬜ Erase'],['fill','🪣 Fill'],['pick','💧 Pick']].forEach(([t,lbl])=>{
+    const b=document.createElement('button');
+    b.className='ed-btn';b.textContent=lbl;
+    b.onclick=()=>{ ED.tool=t; refreshToolbar(); };
+    toolBtns[t]=b; toolbar.appendChild(b);
+  });
+
+  // Zoom buttons
+  const zoomBtns=document.createElement('span');
+  zoomBtns.style.cssText='display:flex;gap:2px;align-items:center;';
+  const zoomIn=document.createElement('button');
+  zoomIn.className='ed-btn warn';zoomIn.textContent='+';
+  zoomIn.title='Zoom in (scroll wheel also works)';
+  zoomIn.onclick=()=>edZoom(2);
+  const zoomOut=document.createElement('button');
+  zoomOut.className='ed-btn warn';zoomOut.textContent='−';
+  zoomOut.title='Zoom out';
+  zoomOut.onclick=()=>edZoom(0.5);
+  const zoomReset=document.createElement('button');
+  zoomReset.className='ed-btn warn';zoomReset.textContent='1:1';
+  zoomReset.onclick=()=>{ED.zoom=1;ED.camX=0;ED.camY=0;zoomLabel.textContent='1×';edRender();};
+  zoomBtns.append(zoomIn,zoomOut,zoomReset);
+  toolbar.appendChild(zoomBtns);
+
+  const gridBtn=document.createElement('button');
+  gridBtn.className='ed-btn active';gridBtn.textContent='Grid ✓';
+  gridBtn.onclick=()=>{
+    ED.showGrid=!ED.showGrid;
+    gridBtn.textContent='Grid '+(ED.showGrid?'✓':'○');
+    gridBtn.classList.toggle('active',ED.showGrid);
+    edRender();
+  };
+  toolbar.appendChild(gridBtn);
+
+  const dlBtn=document.createElement('button');
+  dlBtn.className='ed-btn success';dlBtn.textContent='⬇ Save';
+  dlBtn.onclick=()=>downloadEditor();
+  toolbar.appendChild(dlBtn);
+
+  const exitBtn=document.createElement('button');
+  exitBtn.className='ed-btn danger';exitBtn.textContent='✕ Exit';
+  exitBtn.onclick=()=>closeEditor();
+  toolbar.appendChild(exitBtn);
+
+  panel.appendChild(toolbar);
+
+  // Tabs — removed Bugs, renamed to Pixel
+  const tabBar=document.createElement('div');tabBar.className='ed-tabs';
+  const tabDefs=[['tiles','🧱 Tiles'],['biomes','🗺 Biomes'],['custom','✏ Custom']];
+  const tabEls={};
+  tabDefs.forEach(([id,lbl])=>{
+    const t=document.createElement('button');
+    t.className='ed-tab'+(id==='tiles'?' active':'');
+    t.textContent=lbl;
+    t.onclick=()=>{
+      ED.tab=id;
+      Object.entries(tabEls).forEach(([k,el])=>el.classList.toggle('active',k===id));
+      renderPanel();
+    };
+    tabEls[id]=t;tabBar.appendChild(t);
+  });
+  panel.appendChild(tabBar);
+
+  const panelBody=document.createElement('div');
+  panelBody.id='ed-panel-body';
+  panel.appendChild(panelBody);
+
+  ov.append(mapWrap,panel);
+  document.body.appendChild(ov);
+
+  // ── Pixel editor overlay ──
+  buildPixelEditorDOM();
+
+  // ── Resize handling ──
+  function resizeMapCanvas(){
+    // getBoundingClientRect is reliable across all contexts including iframes
+    const rect=mapWrap.getBoundingClientRect();
+    const W=Math.floor(rect.width)||window.innerWidth-340;
+    const H=Math.floor(rect.height)||window.innerHeight;
+    edCanvas.style.width=W+'px';
+    edCanvas.style.height=H+'px';
+    if(edCanvas.width!==W||edCanvas.height!==H){
+      edCanvas.width=W;
+      edCanvas.height=H;
+    }
+    edRender();
+  }
+  new ResizeObserver(resizeMapCanvas).observe(mapWrap);
+  window.addEventListener('resize',resizeMapCanvas);
+  // Also run after a short delay to catch late layout
+  setTimeout(resizeMapCanvas,100);
+
+  function refreshToolbar(){
+    Object.entries(toolBtns).forEach(([k,b])=>b.classList.toggle('active',ED.tool===k));
+  }
+
+  // ── Map canvas events ──
+  edCanvas.addEventListener('mousedown',e=>{
+    if(e.button===1||e.button===2){
+      _edPan={active:true,sx:e.clientX,sy:e.clientY,cx:ED.camX,cy:ED.camY};
+      e.preventDefault();return;
+    }
+    if(e.button===0){ED.painting=true;edCanvasHit(e);}
+  });
+  edCanvas.addEventListener('contextmenu',e=>e.preventDefault());
+  window.addEventListener('mouseup',()=>{ED.painting=false;_edPan.active=false;});
+  window.addEventListener('mousemove',e=>{
+    if(_edPan.active){
+      const tileW=TW*ED.zoom;
+      const maxX=ED_MAP_W*ED.zoom-edCanvas.width;
+      const maxY=ED_MAP_H*ED.zoom-edCanvas.height;
+      ED.camX=Math.max(0,Math.min(maxX,_edPan.cx-(e.clientX-_edPan.sx)));
+      ED.camY=Math.max(0,Math.min(maxY,_edPan.cy-(e.clientY-_edPan.sy)));
+      edRender();return;
+    }
+    if(!document.getElementById('ed-overlay')?.classList.contains('open')) return;
+    const r=edCanvas.getBoundingClientRect();
+    if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom){
+      ED._hoverTx=undefined;return;
+    }
+    const ex=e.clientX-r.left, ey=e.clientY-r.top;
+    const tileSize=TW*ED.zoom;
+    const tx=Math.floor((ex+ED.camX)/tileSize);
+    const ty=Math.floor((ey+ED.camY)/tileSize);
+    if(tx>=0&&ty>=0&&tx<WIDE&&ty<TALL){
+      ED._hoverTx=tx;ED._hoverTy=ty;
+      coords.textContent=`[${tx},${ty}]  tile:${getMap(ED.zone)[ty]?.[tx]??'?'}`;
+    } else {ED._hoverTx=undefined;coords.textContent='—';}
+    if(ED.painting) edCanvasHit(e);
+    edRender();
+  });
+  edCanvas.addEventListener('wheel',e=>{
+    if(e.ctrlKey||e.metaKey){
+      // ctrl+wheel = zoom
+      edZoom(e.deltaY<0?1.25:0.8, e);
+    } else {
+      const maxX=Math.max(0,ED_MAP_W*ED.zoom-edCanvas.width);
+      const maxY=Math.max(0,ED_MAP_H*ED.zoom-edCanvas.height);
+      ED.camX=Math.max(0,Math.min(maxX,ED.camX+e.deltaX));
+      ED.camY=Math.max(0,Math.min(maxY,ED.camY+e.deltaY));
+      edRender();
+    }
+    e.preventDefault();
+  },{passive:false});
+
+  function edZoom(factor, wheelEvent){
+    const oldZoom=ED.zoom;
+    ED.zoom=Math.max(0.25,Math.min(16,ED.zoom*factor));
+    // zoom toward mouse position
+    if(wheelEvent){
+      const r=edCanvas.getBoundingClientRect();
+      const mx=wheelEvent.clientX-r.left, my=wheelEvent.clientY-r.top;
+      ED.camX=(ED.camX+mx)*ED.zoom/oldZoom-mx;
+      ED.camY=(ED.camY+my)*ED.zoom/oldZoom-my;
+    } else {
+      const cx=edCanvas.width/2, cy=edCanvas.height/2;
+      ED.camX=(ED.camX+cx)*ED.zoom/oldZoom-cx;
+      ED.camY=(ED.camY+cy)*ED.zoom/oldZoom-cy;
+    }
+    const maxX=Math.max(0,ED_MAP_W*ED.zoom-edCanvas.width);
+    const maxY=Math.max(0,ED_MAP_H*ED.zoom-edCanvas.height);
+    ED.camX=Math.max(0,Math.min(maxX,ED.camX));
+    ED.camY=Math.max(0,Math.min(maxY,ED.camY));
+    zoomLabel.textContent=ED.zoom>=1?Math.round(ED.zoom)+'×':('1/'+(Math.round(1/ED.zoom))+'×');
+    edRender();
+  }
+  // expose for keyboard shortcuts
+  ED._edZoom=edZoom;
+
+  function edCanvasHit(e){
+    const r=edCanvas.getBoundingClientRect();
+    const ex=e.clientX-r.left, ey=e.clientY-r.top;
+    const tileSize=TW*ED.zoom;
+    const tx=Math.floor((ex+ED.camX)/tileSize);
+    const ty=Math.floor((ey+ED.camY)/tileSize);
+    if(tx<0||ty<0||tx>=WIDE||ty>=TALL) return;
+    const map=getMap(ED.zone);
+    if(ED.tool==='paint')  { map[ty][tx]=ED.brush; }
+    else if(ED.tool==='erase') { map[ty][tx]=0; }
+    else if(ED.tool==='pick')  { ED.brush=map[ty][tx]; ED.tool='paint'; refreshToolbar(); renderPanel(); }
+    else if(ED.tool==='fill')  { edFloodFill(tx,ty,map[ty][tx],ED.brush,map); }
+    edRender();
+  }
+
+  window.addEventListener('keydown',e=>{
+    if(!document.getElementById('ed-overlay')?.classList.contains('open')) return;
+    if(document.activeElement&&document.activeElement.tagName==='INPUT') return;
+    if(e.key==='Escape') closeEditor();
+    if(e.key==='p') ED.tool='paint';
+    if(e.key==='e') ED.tool='erase';
+    if(e.key==='f') ED.tool='fill';
+    if(e.key==='d') ED.tool='pick';
+    if(e.key==='g'){ED.showGrid=!ED.showGrid;gridBtn.textContent='Grid '+(ED.showGrid?'✓':'○');gridBtn.classList.toggle('active',ED.showGrid);}
+    if(e.key==='='||e.key==='+') edZoom(2);
+    if(e.key==='-') edZoom(0.5);
+    refreshToolbar();
+    const PAN=TW*ED.zoom*3;
+    const maxX=Math.max(0,ED_MAP_W*ED.zoom-edCanvas.width);
+    const maxY=Math.max(0,ED_MAP_H*ED.zoom-edCanvas.height);
+    if(e.key==='ArrowLeft')  {ED.camX=Math.max(0,ED.camX-PAN);e.preventDefault();}
+    if(e.key==='ArrowRight') {ED.camX=Math.min(maxX,ED.camX+PAN);e.preventDefault();}
+    if(e.key==='ArrowUp')    {ED.camY=Math.max(0,ED.camY-PAN);e.preventDefault();}
+    if(e.key==='ArrowDown')  {ED.camY=Math.min(maxY,ED.camY+PAN);e.preventDefault();}
+    edRender();
+  });
+
+  // ── Panel render ──
+  function renderPanel(){
+    panelBody.innerHTML='';
+    if(ED.tab==='tiles')   renderTilesTab();
+    else if(ED.tab==='biomes')  renderBiomesTab();
+    else if(ED.tab==='custom')  renderCustomTab();
+  }
+
+  function allTileList(){
+    return [...EDITOR_TILES,...CUSTOM_TILE_REG.map((ct,i)=>({v:CUSTOM_TILE_BASE+i,label:ct.label,solid:ct.solid,enc:ct.enc,color:ct.color}))];
+  }
+
+  function renderTilesTab(){
+    const sec=document.createElement('div');sec.className='ed-sec';
+    sec.textContent='Click tile to select · paint on map · 🔍 to pixel-edit';
+    panelBody.appendChild(sec);
+    const grid=document.createElement('div');grid.id='ed-tile-grid';
+    allTileList().forEach(tile=>{
+      const card=document.createElement('div');
+      card.className='ed-tile-card'+(ED.brush===tile.v?' sel':'');
+      card.title=tile.label;
+      const img=document.createElement('img');
+      const tileIdx=tile.v-CUSTOM_TILE_BASE;
+      if(PIXEL_CUSTOM_CANVASES[tile.v]){
+        img.src=PIXEL_CUSTOM_CANVASES[tile.v].toDataURL();
+      } else if(tile.color){
+        img.src=solidSwatch(tile.color);
+      } else {
+        img.src=edTileSwatch(tile.v,ED.zone);
+      }
+      card.appendChild(img);
+      const lbl=document.createElement('div');lbl.className='tc-label';lbl.textContent=tile.label;
+      card.appendChild(lbl);
+      if(tile.solid){const b=document.createElement('div');b.className='tc-badge solid';b.textContent='solid';card.appendChild(b);}
+      else if(tile.enc){const b=document.createElement('div');b.className='tc-badge enc';b.textContent='enc';card.appendChild(b);}
+      // Pixel edit button — for built-in tiles AND custom pixel tiles
+      if(!tile.color){
+        const pxBtn=document.createElement('button');
+        pxBtn.className='tc-px-btn';pxBtn.textContent='🔍';pxBtn.title='Pixel editor';
+        pxBtn.onclick=(ev)=>{ev.stopPropagation();openPixelEditor(tile.v);};
+        card.appendChild(pxBtn);
+      } else if(PIXEL_CUSTOM_CANVASES[tile.v]){
+        const pxBtn=document.createElement('button');
+        pxBtn.className='tc-px-btn';pxBtn.textContent='✏';pxBtn.title='Re-edit pixel art';
+        pxBtn.onclick=(ev)=>{ev.stopPropagation();openPixelEditorForCustom(tile.v);};
+        card.appendChild(pxBtn);
+      }
+      card.onclick=()=>{ED.brush=tile.v;ED.tool='paint';refreshToolbar();renderPanel();};
+      grid.appendChild(card);
+    });
+    panelBody.appendChild(grid);
+  }
+
+  function renderBiomesTab(){
+    const sec=document.createElement('div');sec.className='ed-sec';sec.textContent='Switch biome / warp into game';
+    panelBody.appendChild(sec);
+    EDITOR_ZONES.forEach(z=>{
+      const row=document.createElement('div');row.className='ed-biome-row';
+      const bb=document.createElement('button');
+      bb.className='ed-biome-btn'+(ED.zone===z.id?' active':'');
+      bb.textContent=(ED.zone===z.id?'▶ ':'   ')+z.label;
+      bb.onclick=()=>{
+        ED.zone=z.id;ED.camX=0;ED.camY=0;
+        // DON'T call resetMap — preserves any edits
+        zoneLabel.textContent=z.label;
+        renderPanel();edRender();
+      };
+      const wb=document.createElement('button');
+      wb.className='ed-warp-btn';wb.textContent='▶ Play';
+      wb.onclick=()=>edWarpToZone(z.id);
+      row.append(bb,wb);
+      panelBody.appendChild(row);
+    });
+    const note=document.createElement('div');note.style.cssText='font-size:10px;color:#506070;margin-top:8px;line-height:1.5;';
+    note.textContent='Switching biome keeps your map edits.\nPlay warps you in with all zones unlocked.';
+    panelBody.appendChild(note);
+  }
+
+  function renderCustomTab(){
+    const sec=document.createElement('div');sec.className='ed-sec';sec.textContent='Create a custom tile type';
+    panelBody.appendChild(sec);
+    // Color
+    const clbl=document.createElement('div');clbl.className='ed-sec';clbl.textContent='Color';
+    panelBody.appendChild(clbl);
+    const cgrid=document.createElement('div');cgrid.className='ed-color-grid';
+    ['#e03020','#f8a000','#40c030','#2070e0','#d060d0','#8040c0','#f8f040','#80d0d0',
+     '#ffffff','#808080','#402010','#0a0a20','#ff6090','#00c8a0','#e0a040','#2840a0'].forEach(c=>{
+      const sw=document.createElement('div');sw.className='ed-csw'+(ED.customColor===c?' sel':'');
+      sw.style.background=c;sw.onclick=()=>{ED.customColor=c;renderPanel();};
+      cgrid.appendChild(sw);
+    });
+    panelBody.appendChild(cgrid);
+    // Flags
+    const fr=document.createElement('div');fr.style.cssText='display:flex;gap:5px;margin:5px 0;';
+    const solidB=document.createElement('button');solidB.className='ed-btn'+(ED.customSolid?' active':'');
+    solidB.textContent=(ED.customSolid?'✓ ':'')+'Solid';
+    solidB.onclick=()=>{ED.customSolid=!ED.customSolid;if(ED.customSolid)ED.customEnc=false;renderPanel();};
+    const encB=document.createElement('button');encB.className='ed-btn'+(ED.customEnc?' active':'');
+    encB.textContent=(ED.customEnc?'✓ ':'')+'Encounter';
+    encB.onclick=()=>{ED.customEnc=!ED.customEnc;if(ED.customEnc)ED.customSolid=false;renderPanel();};
+    fr.append(solidB,encB);panelBody.appendChild(fr);
+    // Label
+    const ll=document.createElement('div');ll.className='ed-sec';ll.textContent='Label';panelBody.appendChild(ll);
+    const inp=document.createElement('input');inp.type='text';inp.maxLength=12;inp.value=ED.customLabel;
+    inp.style.cssText='width:100%;background:#1a1e28;color:#e0eaf8;border:1px solid #405060;border-radius:4px;padding:4px 6px;font-family:inherit;font-size:12px;box-sizing:border-box;';
+    inp.oninput=()=>ED.customLabel=inp.value;
+    panelBody.appendChild(inp);
+    // Add
+    const addB=document.createElement('button');addB.className='ed-btn success';
+    addB.style.cssText='width:100%;margin-top:8px;padding:7px;font-size:12px;';
+    addB.textContent='+ Add flat-color tile';
+    addB.onclick=()=>{
+      CUSTOM_TILE_REG.push({label:ED.customLabel||'Custom',solid:ED.customSolid,enc:ED.customEnc,color:ED.customColor});
+      ED.tab='tiles';Object.entries(tabEls).forEach(([k,el])=>el.classList.toggle('active',k==='tiles'));
+      renderPanel();
+    };
+    panelBody.appendChild(addB);
+
+    // Draw from scratch button
+    const hr=document.createElement('hr');hr.style.cssText='border:none;border-top:1px solid #303848;margin:10px 0;';
+    panelBody.appendChild(hr);
+    const pxSec=document.createElement('div');pxSec.className='ed-sec';pxSec.textContent='Or design pixel-by-pixel';
+    panelBody.appendChild(pxSec);
+    const pxNote=document.createElement('div');pxNote.style.cssText='font-size:10px;color:#506070;margin-bottom:8px;line-height:1.5;';
+    pxNote.textContent='Opens the pixel editor with a blank 16×16 canvas.\nWhen you apply, it\'s added to the tile palette and you can paint it on the map.';
+    panelBody.appendChild(pxNote);
+    const pxBtn=document.createElement('button');pxBtn.className='ed-btn warn';
+    pxBtn.style.cssText='width:100%;padding:8px;font-size:12px;';
+    pxBtn.textContent='🎨 Draw new tile from scratch';
+    pxBtn.onclick=()=>openPixelEditorNew();
+    panelBody.appendChild(pxBtn);
+    // Existing list
+    if(CUSTOM_TILE_REG.length){
+      const s2=document.createElement('div');s2.className='ed-sec';s2.textContent='Your tiles';panelBody.appendChild(s2);
+      CUSTOM_TILE_REG.forEach((ct,i)=>{
+        const r=document.createElement('div');
+        r.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:pointer;padding:4px;border-radius:3px;border:1px solid #303848;';
+        const sw=document.createElement('div');sw.style.cssText=`width:20px;height:20px;background:${ct.color};border-radius:2px;flex-shrink:0;`;
+        const nm=document.createElement('span');nm.style.cssText='color:#c0d0e0;font-size:11px;';
+        nm.textContent=ct.label+(ct.solid?' [solid]':ct.enc?' [enc]':'');
+        r.append(sw,nm);
+        r.onclick=()=>{ED.brush=CUSTOM_TILE_BASE+i;ED.tool='paint';ED.tab='tiles';Object.entries(tabEls).forEach(([k,el])=>el.classList.toggle('active',k==='tiles'));refreshToolbar();renderPanel();};
+        panelBody.appendChild(r);
+      });
+    }
+  }
+
+  ED._renderPanel=renderPanel;
+  ED._refreshToolbar=refreshToolbar;
+  ED._zoneLabel=zoneLabel;
+  ED._edCanvas=edCanvas;
+  ED._resizeMapCanvas=resizeMapCanvas;
+  refreshToolbar();renderPanel();
+}
+
+function solidSwatch(color){
+  const sc=document.createElement('canvas');sc.width=sc.height=TW*3;
+  sc.getContext('2d').fillStyle=color;sc.getContext('2d').fillRect(0,0,TW*3,TW*3);
+  return sc.toDataURL();
+}
+
+// ── Map renderer ──
+function edRender(){
+  const edCanvas=document.getElementById('ed-map-canvas');
+  if(!edCanvas) return;
+  const ctx=edCanvas.getContext('2d');
+  const W=edCanvas.width,H=edCanvas.height;
+  ctx.fillStyle='#0a0c10';ctx.fillRect(0,0,W,H);
+
+  const map=getMap(ED.zone);
+  const tileSize=TW*ED.zoom;
+  const _X=X,_zone=G.zone;
+  X=ctx;G.zone=ED.zone;
+
+  ctx.save();
+  ctx.scale(ED.zoom,ED.zoom);
+  for(let ty=0;ty<TALL;ty++){
+    for(let tx=0;tx<WIDE;tx++){
+      const sx=tx*TW-ED.camX/ED.zoom, sy=ty*TW-ED.camY/ED.zoom;
+      if(sx+TW<0||sy+TW<0||sx>W/ED.zoom||sy>H/ED.zoom) continue;
+      const t=map[ty][tx];
+      try{drawTile(t,sx,sy,tx,ty);}catch(e){}
+      if(t>=CUSTOM_TILE_BASE){
+        const ct=CUSTOM_TILE_REG[t-CUSTOM_TILE_BASE];
+        if(ct){
+          if(PIXEL_CUSTOM_CANVASES[t]){
+            ctx.drawImage(PIXEL_CUSTOM_CANVASES[t],sx,sy,TW,TW);
+          } else {
+            ctx.fillStyle=ct.color;ctx.globalAlpha=0.65;ctx.fillRect(sx,sy,TW,TW);ctx.globalAlpha=1;
+          }
+        }
+      }
+    }
+  }
+  ctx.restore();
+  X=_X;G.zone=_zone;
+
+  // Grid
+  if(ED.showGrid&&tileSize>=4){
+    ctx.strokeStyle=ED.zoom>=4?'rgba(255,255,255,0.18)':'rgba(255,255,255,0.07)';
+    ctx.lineWidth=ED.zoom>=4?1:0.5;
+    for(let tx=0;tx<=WIDE;tx++){const sx=tx*tileSize-ED.camX;ctx.beginPath();ctx.moveTo(sx,0);ctx.lineTo(sx,H);ctx.stroke();}
+    for(let ty=0;ty<=TALL;ty++){const sy=ty*tileSize-ED.camY;ctx.beginPath();ctx.moveTo(0,sy);ctx.lineTo(W,sy);ctx.stroke();}
+  }
+
+  // Hover highlight
+  if(ED._hoverTx!==undefined){
+    const sx=ED._hoverTx*tileSize-ED.camX, sy=ED._hoverTy*tileSize-ED.camY;
+    ctx.strokeStyle='rgba(255,255,255,0.75)';ctx.lineWidth=Math.max(1,ED.zoom);
+    ctx.strokeRect(sx+1,sy+1,tileSize-2,tileSize-2);
+    // Brush preview (top-right corner)
+    if(ED.brush>=0&&ED.brush<CUSTOM_TILE_BASE&&W>60){
+      const ps=Math.min(48,tileSize);
+      ctx.save();ctx.beginPath();ctx.rect(W-ps-2,2,ps,ps);ctx.clip();
+      const _X2=X,_z2=G.zone;X=ctx;G.zone=ED.zone;
+      ctx.scale(ps/TW,ps/TW);
+      try{drawTile(ED.brush,(W-ps-2)*TW/ps,2*TW/ps,0,0);}catch(e){}
+      ctx.setTransform(1,0,0,1,0,0);
+      X=_X2;G.zone=_z2;
+      ctx.restore();
+      ctx.strokeStyle='rgba(255,255,255,0.4)';ctx.lineWidth=1;ctx.strokeRect(W-ps-2,2,ps,ps);
+    }
+  }
+}
+
+// ── Flood fill (iterative) ──
+function edFloodFill(tx,ty,from,to,map){
+  if(from===to) return;
+  const stack=[[tx,ty]];
+  const visited=new Set();
+  while(stack.length){
+    const [x,y]=stack.pop();
+    const key=x+','+y;
+    if(x<0||y<0||x>=WIDE||y>=TALL||visited.has(key)||map[y][x]!==from) continue;
+    visited.add(key);
+    map[y][x]=to;
+    stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
+  }
+}
+
+// ═══════════════════════════════════════════════
+// PIXEL EDITOR  — zoom into a tile, paint pixels
+// ═══════════════════════════════════════════════
+// Each game tile = 16×16 logical pixels (TW=16)
+// We capture a tile render into ImageData, let user edit pixel by pixel
+
+const PX_COLORS=[
+  '#000000','#ffffff','#ff0000','#ff8800','#ffff00','#00cc00',
+  '#0088ff','#8800ff','#ff00aa','#884400','#aaaaaa','#334455',
+  '#40ff80','#ff4040','#80ffff','#ffcc80','#6644aa','#ff8080',
+  '#204080','#008040','#c0a020','#602010','#e8e0d0','#1a2030',
+];
+
+function buildPixelEditorDOM(){
+  if(document.getElementById('ed-pixel-overlay')) return;
+
+  // Inject mobile-first pixel editor styles
+  const pxStyle=document.createElement('style');
+  pxStyle.textContent=`
+  #ed-pixel-overlay{
+    position:fixed;inset:0;z-index:10000;
+    background:#0e1018;
+    display:none;flex-direction:column;
+    font-family:'Courier New',monospace;
+    touch-action:none;
+    user-select:none;-webkit-user-select:none;
+  }
+  #ed-pixel-overlay.open{display:flex;}
+
+  /* ── Top bar ── */
+  #ed-px-topbar{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 10px;background:#1a1e2a;
+    border-bottom:1px solid #303848;flex-shrink:0;
+    flex-wrap:wrap;
+  }
+  #ed-px-title{
+    color:#f8e040;font-size:13px;font-weight:bold;flex:1;min-width:0;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .px-topbtn{
+    background:#252d3f;color:#c8d8f0;border:1px solid #405070;
+    border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;
+    font-family:inherit;white-space:nowrap;min-height:36px;
+    touch-action:manipulation;
+  }
+  .px-topbtn:active{background:#304060;}
+  .px-topbtn.success{background:#1a4a1a;border-color:#40a040;color:#a0f0a0;}
+  .px-topbtn.danger{background:#5a1a1a;border-color:#a03030;color:#ffb0b0;}
+  .px-topbtn.active{background:#3a6aaa;border-color:#80b0ff;color:#fff;}
+  .px-topbtn.warn{background:#3a2a08;border-color:#a08020;color:#f0d060;}
+
+  /* ── Main area: canvas + side tools ── */
+  #ed-px-main{
+    display:flex;flex-direction:row;flex:1;min-height:0;overflow:hidden;
+  }
+
+  /* ── Drawing canvas ── */
+  #ed-px-canvas-wrap{
+    flex:1;min-width:0;
+    display:flex;align-items:center;justify-content:center;
+    background:#0a0c10;overflow:hidden;position:relative;
+  }
+  #ed-px-canvas{
+    image-rendering:pixelated;
+    cursor:crosshair;
+    touch-action:none;
+    /* sized dynamically */
+  }
+
+  /* ── Side panel (desktop) ── */
+  #ed-px-side{
+    width:180px;min-width:180px;
+    background:#16191f;border-left:1px solid #303848;
+    display:flex;flex-direction:column;overflow-y:auto;padding:8px;gap:6px;
+  }
+  #ed-px-side::-webkit-scrollbar{width:4px;}
+  #ed-px-side::-webkit-scrollbar-thumb{background:#304050;border-radius:2px;}
+
+  /* Color preview + eraser row */
+  #ed-px-activerow{
+    display:flex;align-items:center;gap:8px;margin-bottom:2px;
+  }
+  #ed-px-activecolor{
+    width:40px;height:40px;border-radius:6px;border:2px solid #fff;flex-shrink:0;
+  }
+  #ed-px-erasecheck{
+    display:flex;align-items:center;gap:4px;cursor:pointer;
+  }
+  #ed-px-preview-wrap{display:flex;flex-direction:column;align-items:center;gap:2px;}
+  #ed-px-preview{
+    width:64px;height:64px;image-rendering:pixelated;
+    border:1px solid #405060;border-radius:3px;
+  }
+
+  /* Palette grid */
+  #ed-px-palette{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:4px;
+  }
+  .ed-px-col{
+    aspect-ratio:1;border-radius:4px;cursor:pointer;
+    border:2px solid transparent;
+    min-height:28px;touch-action:manipulation;
+  }
+  .ed-px-col:active{opacity:0.8;}
+  .ed-px-col.sel{border-color:#fff;box-shadow:0 0 0 1px #fff;}
+
+  /* custom color input */
+  #ed-px-custrow{display:flex;align-items:center;gap:6px;margin-top:2px;}
+  #ed-px-custinput{
+    width:44px;height:32px;border:none;background:none;cursor:pointer;padding:0;border-radius:4px;
+  }
+
+  /* zoom slider */
+  #ed-px-zoomrow{display:flex;flex-direction:column;gap:2px;}
+  #ed-px-zoomlbl{color:#a0b0c0;font-size:10px;}
+  #ed-px-zoomslider{width:100%;}
+
+  /* ── Bottom palette bar (mobile) ── */
+  #ed-px-bottombar{
+    display:none;
+    flex-direction:column;
+    background:#16191f;border-top:1px solid #303848;
+    flex-shrink:0;padding:6px 8px;gap:6px;
+  }
+  #ed-px-bottomrow1{display:flex;align-items:center;gap:8px;}
+  #ed-px-bottomcolor{width:44px;height:44px;border-radius:8px;border:3px solid #fff;flex-shrink:0;}
+  #ed-px-bottomerase{
+    padding:0 16px;height:44px;border-radius:8px;
+    background:#252d3f;color:#c8d8f0;border:1px solid #405070;
+    font-size:14px;cursor:pointer;font-family:inherit;touch-action:manipulation;
+  }
+  #ed-px-bottomerase.active{background:#3a6aaa;border-color:#80b0ff;}
+  #ed-px-bottompalette{
+    display:flex;flex-direction:row;overflow-x:auto;gap:6px;
+    padding-bottom:4px;
+  }
+  #ed-px-bottompalette::-webkit-scrollbar{height:3px;}
+  #ed-px-bottompalette::-webkit-scrollbar-thumb{background:#405060;border-radius:2px;}
+  .ed-px-bsw{
+    width:44px;height:44px;flex-shrink:0;border-radius:8px;
+    border:3px solid transparent;cursor:pointer;touch-action:manipulation;
+  }
+  .ed-px-bsw.sel{border-color:#fff;}
+  #ed-px-custbottom{
+    width:48px;height:44px;flex-shrink:0;border:none;border-radius:8px;
+    background:none;cursor:pointer;padding:0;
+  }
+
+  /* Responsive: on narrow screens show bottom bar, hide side panel */
+  @media(max-width:640px){
+    #ed-px-side{display:none;}
+    #ed-px-bottombar{display:flex;}
+    #ed-px-topbar{padding:6px 8px;}
+    .px-topbtn{padding:8px 12px;font-size:14px;min-height:42px;}
+    #ed-px-title{font-size:12px;}
+  }
+  `;
+  document.head.appendChild(pxStyle);
+
+  const pxOv=document.createElement('div');
+  pxOv.id='ed-pixel-overlay';
+
+  // ── Top bar ──
+  const topBar=document.createElement('div');topBar.id='ed-px-topbar';
+  const titleEl=document.createElement('div');titleEl.id='ed-px-title';titleEl.setAttribute('data-pxtitle','1');
+  titleEl.textContent='PIXEL EDITOR';
+  topBar.appendChild(titleEl);
+
+  // Zoom in/out (desktop shortcut — mobile uses pinch or slider)
+  const zInBtn=document.createElement('button');zInBtn.className='px-topbtn warn';zInBtn.textContent='+';zInBtn.title='Bigger pixels';
+  const zOutBtn=document.createElement('button');zOutBtn.className='px-topbtn warn';zOutBtn.textContent='−';zOutBtn.title='Smaller pixels';
+  topBar.append(zInBtn,zOutBtn);
+
+  const applyBtn=document.createElement('button');applyBtn.className='px-topbtn success';
+  applyBtn.setAttribute('data-pxapply','1');applyBtn.textContent='✓ Apply';
+  applyBtn.onclick=()=>{applyPixelEdit();closePixelEditor();};
+  const closeBtn=document.createElement('button');closeBtn.className='px-topbtn danger';
+  closeBtn.textContent='✕';closeBtn.onclick=closePixelEditor;
+  topBar.append(applyBtn,closeBtn);
+  pxOv.appendChild(topBar);
+
+  // ── Main area ──
+  const mainArea=document.createElement('div');mainArea.id='ed-px-main';
+
+  // Drawing canvas wrap
+  const canvasWrap=document.createElement('div');canvasWrap.id='ed-px-canvas-wrap';
+  const pxCanvas=document.createElement('canvas');pxCanvas.id='ed-px-canvas';
+  canvasWrap.appendChild(pxCanvas);
+  mainArea.appendChild(canvasWrap);
+
+  // ── Side panel (desktop) ──
+  const side=document.createElement('div');side.id='ed-px-side';
+
+  // Active color + erase
+  const activeRow=document.createElement('div');activeRow.id='ed-px-activerow';
+  const activeColor=document.createElement('div');activeColor.id='ed-px-activecolor';
+  activeColor.style.background=ED.px.selColor;
+  let pxErase=false;
+  const eraseLabel=document.createElement('label');eraseLabel.id='ed-px-erasecheck';
+  const eraseCb=document.createElement('input');eraseCb.type='checkbox';
+  const eraseTxt=document.createElement('span');eraseTxt.style.cssText='color:#c0d0e0;font-size:12px;';eraseTxt.textContent='Erase';
+  eraseLabel.append(eraseCb,eraseTxt);
+  eraseCb.onchange=()=>{pxErase=eraseCb.checked;};
+  activeRow.append(activeColor,eraseLabel);
+  side.appendChild(activeRow);
+
+  // Preview
+  const pvWrap=document.createElement('div');pvWrap.id='ed-px-preview-wrap';
+  const pvLbl=document.createElement('div');pvLbl.style.cssText='color:#a0b0c0;font-size:10px;';pvLbl.textContent='PREVIEW (1:1)';
+  const pxPrev=document.createElement('canvas');pxPrev.id='ed-px-preview';pxPrev.width=pxPrev.height=TW;
+  pvWrap.append(pvLbl,pxPrev);
+  side.appendChild(pvWrap);
+
+  // Color palette (4 cols)
+  const palLbl=document.createElement('div');palLbl.style.cssText='color:#a0b0c0;font-size:10px;margin-top:4px;';palLbl.textContent='PALETTE';
+  side.appendChild(palLbl);
+  const pal=document.createElement('div');pal.id='ed-px-palette';
+  PX_COLORS.forEach(c=>{
+    const sw=document.createElement('div');sw.className='ed-px-col'+(c===ED.px.selColor?' sel':'');
+    sw.style.background=c;
+    sw.onclick=()=>{ED.px.selColor=c;pxErase=false;eraseCb.checked=false;refreshPxPalette();};
+    pal.appendChild(sw);
+  });
+  side.appendChild(pal);
+
+  // Custom color
+  const custRow=document.createElement('div');custRow.id='ed-px-custrow';
+  const custLbl=document.createElement('span');custLbl.style.cssText='color:#a0b0c0;font-size:10px;';custLbl.textContent='Custom:';
+  const ccInput=document.createElement('input');ccInput.type='color';ccInput.id='ed-px-custinput';ccInput.value=ED.px.selColor;
+  ccInput.oninput=()=>{ED.px.selColor=ccInput.value;pxErase=false;eraseCb.checked=false;refreshPxPalette();};
+  custRow.append(custLbl,ccInput);
+  side.appendChild(custRow);
+
+  // Zoom slider
+  const zRow=document.createElement('div');zRow.id='ed-px-zoomrow';
+  const zLbl=document.createElement('div');zLbl.id='ed-px-zoomlbl';zLbl.textContent=`Pixel: ${ED.px.zoom}px`;
+  const zSlider=document.createElement('input');zSlider.type='range';zSlider.id='ed-px-zoomslider';
+  zSlider.min=4;zSlider.max=28;zSlider.value=ED.px.zoom;
+  function setZoom(z){
+    ED.px.zoom=Math.max(4,Math.min(28,z));
+    zSlider.value=ED.px.zoom;
+    zLbl.textContent=`Pixel: ${ED.px.zoom}px`;
+    resizePxCanvas();
+    pxRender(pxCanvas);
+    syncBottomPalette();
+  }
+  zSlider.oninput=()=>setZoom(+zSlider.value);
+  zInBtn.onclick=()=>setZoom(ED.px.zoom+2);
+  zOutBtn.onclick=()=>setZoom(ED.px.zoom-2);
+  zRow.append(zLbl,zSlider);
+  side.appendChild(zRow);
+
+  mainArea.appendChild(side);
+  pxOv.appendChild(mainArea);
+
+  // ── Bottom bar (mobile) ──
+  const botBar=document.createElement('div');botBar.id='ed-px-bottombar';
+  const botRow1=document.createElement('div');botRow1.id='ed-px-bottomrow1';
+  const botColor=document.createElement('div');botColor.id='ed-px-bottomcolor';
+  botColor.style.background=ED.px.selColor;
+  const botErase=document.createElement('button');botErase.id='ed-px-bottomerase';botErase.textContent='⬜ Erase';
+  botErase.onclick=()=>{pxErase=!pxErase;eraseCb.checked=pxErase;botErase.classList.toggle('active',pxErase);botErase.textContent=pxErase?'⬜ Erasing':'⬜ Erase';};
+  botRow1.append(botColor,botErase);
+
+  // Custom color for mobile
+  const custBot=document.createElement('input');custBot.type='color';custBot.id='ed-px-custbottom';custBot.value=ED.px.selColor;
+  custBot.oninput=()=>{ED.px.selColor=custBot.value;pxErase=false;eraseCb.checked=false;botErase.classList.remove('active');botErase.textContent='⬜ Erase';refreshPxPalette();};
+  botRow1.appendChild(custBot);
+  botBar.appendChild(botRow1);
+
+  // Scrollable color strip
+  const botPal=document.createElement('div');botPal.id='ed-px-bottompalette';
+  PX_COLORS.forEach(c=>{
+    const sw=document.createElement('div');sw.className='ed-px-bsw'+(c===ED.px.selColor?' sel':'');
+    sw.style.background=c;sw.dataset.color=c;
+    sw.onclick=()=>{ED.px.selColor=c;pxErase=false;eraseCb.checked=false;botErase.classList.remove('active');botErase.textContent='⬜ Erase';refreshPxPalette();};
+    botPal.appendChild(sw);
+  });
+  botBar.appendChild(botPal);
+  pxOv.appendChild(botBar);
+
+  document.body.appendChild(pxOv);
+
+  // ── Canvas sizing ──
+  function resizePxCanvas(){
+    const wrapW=canvasWrap.clientWidth||window.innerWidth;
+    const wrapH=canvasWrap.clientHeight||window.innerHeight*0.7;
+    // Fit canvas to wrap, respecting pixel zoom
+    const naturalSize=TW*ED.px.zoom;
+    // Allow the canvas to grow up to wrap size
+    pxCanvas.width=naturalSize;
+    pxCanvas.height=naturalSize;
+    // Scale CSS size to fit wrap without exceeding it
+    const scale=Math.min(1,(wrapW-8)/naturalSize,(wrapH-8)/naturalSize);
+    const cssPx=Math.floor(naturalSize*scale);
+    pxCanvas.style.width=cssPx+'px';
+    pxCanvas.style.height=cssPx+'px';
+  }
+  new ResizeObserver(()=>{resizePxCanvas();pxRender(pxCanvas);}).observe(canvasWrap);
+  ED.px._resizePxCanvas=resizePxCanvas;
+
+  function syncBottomPalette(){
+    document.querySelectorAll('.ed-px-bsw').forEach(sw=>sw.classList.toggle('sel',sw.dataset.color===ED.px.selColor));
+    botColor.style.background=ED.px.selColor;
+    custBot.value=ED.px.selColor;
+  }
+
+  function refreshPxPalette(){
+    document.querySelectorAll('.ed-px-col').forEach((sw,i)=>sw.classList.toggle('sel',PX_COLORS[i]===ED.px.selColor));
+    activeColor.style.background=ED.px.selColor;
+    ccInput.value=ED.px.selColor;
+    syncBottomPalette();
+  }
+  ED.px._refreshPalette=refreshPxPalette;
+
+  // ── Drawing: mouse ──
+  pxCanvas.addEventListener('mousedown',e=>{e.preventDefault();ED.px.painting=true;pxHit(e,pxCanvas,()=>pxErase);});
+  pxCanvas.addEventListener('contextmenu',e=>e.preventDefault());
+  window.addEventListener('mousemove',e=>{if(ED.px.painting)pxHit(e,pxCanvas,()=>pxErase);});
+  window.addEventListener('mouseup',()=>ED.px.painting=false);
+
+  // ── Drawing: touch ──
+  pxCanvas.addEventListener('touchstart',e=>{
+    e.preventDefault();
+    ED.px.painting=true;
+    pxHitTouch(e,pxCanvas,()=>pxErase);
+  },{passive:false});
+  pxCanvas.addEventListener('touchmove',e=>{
+    e.preventDefault();
+    if(ED.px.painting) pxHitTouch(e,pxCanvas,()=>pxErase);
+  },{passive:false});
+  pxCanvas.addEventListener('touchend',e=>{e.preventDefault();ED.px.painting=false;},{passive:false});
+}
+
+function pxHitTouch(e,pxCanvas,getErase){
+  const t=e.touches[0];
+  if(!t) return;
+  pxHitXY(t.clientX,t.clientY,pxCanvas,getErase());
+}
+
+
+function openPixelEditor(tileV){
+  openPixelEditorInternal(tileV, false);
+}
+
+function openPixelEditorNew(){
+  openPixelEditorInternal(null, true);
+}
+
+function openPixelEditorForCustom(tileValue){
+  buildPixelEditorDOM();
+  const pxOv=document.getElementById('ed-pixel-overlay');
+  if(!pxOv) return;
+  ED.px.open=true;
+  ED.px.isNew=false;
+  ED.px.isCustomEdit=tileValue; // store which custom tile we're editing
+  ED.px.tileV=tileValue;
+  const pxCanvas=document.getElementById('ed-px-canvas');
+  // Load existing pixel data
+  const oc=PIXEL_CUSTOM_CANVASES[tileValue];
+  if(oc){
+    const ctx=oc.getContext('2d');
+    ED.px.data=ctx.getImageData(0,0,TW,TW);
+  } else {
+    ED.px.data=new ImageData(TW,TW);
+  }
+  const title=pxOv.querySelector('[data-pxtitle]');
+  if(title) title.textContent='PIXEL EDITOR — editing custom tile';
+  const applyBtn2=pxOv.querySelector('[data-pxapply]');
+  if(applyBtn2) applyBtn2.textContent='✓ Update tile';
+  if(ED.px._resizePxCanvas) ED.px._resizePxCanvas();
+  pxRender(pxCanvas);
+  pxOv.classList.add('open');
+}
+
+function openPixelEditorInternal(tileV, isNew){
+  buildPixelEditorDOM(); // safe to call multiple times — guards internally
+  const pxOv=document.getElementById('ed-pixel-overlay');
+  if(!pxOv) return;
+  ED.px.open=true;
+  ED.px.isNew=isNew;
+  ED.px.tileV=tileV;
+
+  const pxCanvas=document.getElementById('ed-px-canvas');
+
+  if(isNew){
+    ED.px.data=new ImageData(TW,TW);
+    const title=pxOv.querySelector('[data-pxtitle]');
+    if(title) title.textContent='PIXEL EDITOR — new custom tile';
+  } else {
+    // Capture existing tile render
+    const cap=document.createElement('canvas');cap.width=cap.height=TW;
+    const capCtx=cap.getContext('2d');
+    const _X=X,_zone=G.zone;
+    X=capCtx;G.zone=ED.zone;
+    try{drawTile(tileV,0,0,0,0);}catch(e){}
+    X=_X;G.zone=_zone;
+    ED.px.data=capCtx.getImageData(0,0,TW,TW);
+    const title=pxOv.querySelector('[data-pxtitle]');
+    if(title) title.textContent='PIXEL EDITOR — tile '+tileV;
+  }
+
+  // Update the apply button label
+  const applyBtn=pxOv.querySelector('[data-pxapply]');
+  if(applyBtn) applyBtn.textContent=isNew?'✓ Add as new tile':'✓ Apply to game';
+
+  if(ED.px._resizePxCanvas) ED.px._resizePxCanvas();
+  pxRender(pxCanvas);
+  pxOv.classList.add('open');
+}
+
+function closePixelEditor(){
+  const pxOv=document.getElementById('ed-pixel-overlay');
+  if(pxOv) pxOv.classList.remove('open');
+  ED.px.open=false;
+}
+
+function pxRender(pxCanvas){
+  if(!ED.px.data) return;
+  const ctx=pxCanvas.getContext('2d');
+  const z=ED.px.zoom;
+  ctx.clearRect(0,0,pxCanvas.width,pxCanvas.height);
+  // Checkerboard background
+  for(let py=0;py<TW;py++) for(let px=0;px<TW;px++){
+    ctx.fillStyle=((px+py)%2===0)?'#303040':'#282838';
+    ctx.fillRect(px*z,py*z,z,z);
+  }
+  // Pixels
+  const d=ED.px.data.data;
+  for(let py=0;py<TW;py++){
+    for(let px=0;px<TW;px++){
+      const i=(py*TW+px)*4;
+      const a=d[i+3];
+      if(a>0){
+        ctx.fillStyle=`rgba(${d[i]},${d[i+1]},${d[i+2]},${a/255})`;
+        ctx.fillRect(px*z,py*z,z,z);
+      }
+    }
+  }
+  // Grid (at zoom >= 4)
+  if(z>=4){
+    ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=0.5;
+    for(let i=0;i<=TW;i++){
+      ctx.beginPath();ctx.moveTo(i*z,0);ctx.lineTo(i*z,pxCanvas.height);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,i*z);ctx.lineTo(pxCanvas.width,i*z);ctx.stroke();
+    }
+  }
+  // Update preview
+  const pv=document.getElementById('ed-px-preview');
+  if(pv){
+    const pvCtx=pv.getContext('2d');
+    pvCtx.clearRect(0,0,TW,TW);
+    const tmp=document.createElement('canvas');tmp.width=tmp.height=TW;
+    tmp.getContext('2d').putImageData(ED.px.data,0,0);
+    pvCtx.drawImage(tmp,0,0);
+  }
+}
+
+function pxHit(e,pxCanvas,getErase){
+  pxHitXY(e.clientX,e.clientY,pxCanvas,typeof getErase==='function'?getErase():getErase);
+}
+
+function pxHitXY(clientX,clientY,pxCanvas,erase){
+  if(!ED.px.data||!pxCanvas) return;
+  const r=pxCanvas.getBoundingClientRect();
+  if(clientX<r.left||clientX>r.right||clientY<r.top||clientY>r.bottom) return;
+  // Map CSS coordinates to canvas pixel coordinates
+  const scaleX=pxCanvas.width/r.width;
+  const scaleY=pxCanvas.height/r.height;
+  const px=Math.floor((clientX-r.left)*scaleX/ED.px.zoom);
+  const py=Math.floor((clientY-r.top)*scaleY/ED.px.zoom);
+  if(px<0||py<0||px>=TW||py>=TW) return;
+  const i=(py*TW+px)*4;
+  const d=ED.px.data.data;
+  if(erase){d[i]=0;d[i+1]=0;d[i+2]=0;d[i+3]=0;}
+  else{
+    const col=hexToRgb(ED.px.selColor);
+    d[i]=col.r;d[i+1]=col.g;d[i+2]=col.b;d[i+3]=255;
+  }
+  pxRender(pxCanvas);
+}
+
+function hexToRgb(hex){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return{r,g,b};
+}
+
+function applyPixelEdit(){
+  if(!ED.px.data) return;
+  const clone=new ImageData(new Uint8ClampedArray(ED.px.data.data),TW,TW);
+
+  if(ED.px.isNew){
+    // Convert ImageData to dataURL for storage
+    const oc=document.createElement('canvas');oc.width=oc.height=TW;
+    oc.getContext('2d').putImageData(clone,0,0);
+    const dataURL=oc.toDataURL();
+    CUSTOM_TILE_REG.push({
+      label:ED.customLabel||'Pixel Tile',
+      solid:ED.customSolid,
+      enc:ED.customEnc,
+      color:'#8040c0',
+      pixelDataURL:dataURL,
+    });
+    const newIdx=CUSTOM_TILE_BASE+CUSTOM_TILE_REG.length-1;
+    installPixelCustomTile(newIdx, oc);
+    ED.brush=newIdx;
+    ED.tool='paint';
+    ED.tab='tiles';
+    document.querySelectorAll('.ed-tab').forEach(t=>t.classList.toggle('active',t.textContent.includes('Tiles')));
+  } else if(ED.px.isCustomEdit){
+    // Update existing custom pixel tile
+    const oc=document.createElement('canvas');oc.width=oc.height=TW;
+    oc.getContext('2d').putImageData(clone,0,0);
+    installPixelCustomTile(ED.px.isCustomEdit, oc);
+    const ctIdx=ED.px.isCustomEdit-CUSTOM_TILE_BASE;
+    if(CUSTOM_TILE_REG[ctIdx]) CUSTOM_TILE_REG[ctIdx].pixelDataURL=oc.toDataURL();
+    ED.px.isCustomEdit=null;
+  } else {
+    ED.px.overrides=ED.px.overrides||{};
+    ED.px.overrides[ED.px.tileV]=clone;
+    installPixelOverride(ED.px.tileV,clone);
+  }
+  if(ED._renderPanel) ED._renderPanel();
+  edRender();
+}
+
+function installPixelOverride(tileV,imageData){
+  const oc=document.createElement('canvas');oc.width=oc.height=TW;
+  oc.getContext('2d').putImageData(imageData,0,0);
+  const _prev=drawTile;
+  window.drawTile=function(tile,sx,sy,tx2,ty2){
+    if(tile===tileV){ X.drawImage(oc,sx,sy,TW,TW); }
+    else { _prev(tile,sx,sy,tx2,ty2); }
+  };
+}
+
+// Custom pixel tiles: stored in CUSTOM_TILE_REG with .pixelDataURL
+// edRender draws them via drawImage instead of the flat color overlay
+const PIXEL_CUSTOM_CANVASES={};  // tileValue → offscreen canvas
+
+function installPixelCustomTile(tileValue, offscreenCanvas){
+  PIXEL_CUSTOM_CANVASES[tileValue]=offscreenCanvas;
+}
+
+// ── Open / close / warp ──
+function openEditor(){
+  buildEditorDOM();
+  ED.active=true;
+  G.screen='editor';
+  const ov=document.getElementById('ed-overlay');
+  if(ov) ov.classList.add('open');
+  const zl=document.getElementById('ed-zone-label');
+  if(zl) zl.textContent=(EDITOR_ZONES.find(z=>z.id===ED.zone)||{label:''}).label;
+  ED.camX=0;ED.camY=0;
+  if(ED._renderPanel) ED._renderPanel();
+  if(ED._resizeMapCanvas) ED._resizeMapCanvas();
+  setTimeout(()=>{ if(ED._resizeMapCanvas) ED._resizeMapCanvas(); edRender(); },80);
+}
+
+function closeEditor(){
+  const ov=document.getElementById('ed-overlay');
+  if(ov) ov.classList.remove('open');
+  ED.active=false;
+  G.screen='title';
+}
+
+function edWarpToZone(zid){
+  G.unlockedZones=new Set([1,2,3,'high','hive']);
+  resetAllMaps();
+  if(!G.loadout.length){const s=newCaughtInstance('ambush',5);s.hp=s.maxHp;G.loadout=[s];}
+  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},pc:{x:14,y:14}};
+  const sp=spawns[zid]||{x:14,y:14};
+  G.zone=zid;
+  G.player={x:sp.x*TW,y:sp.y*TW,dir:2,frame:0,visX:sp.x*TW,visY:sp.y*TW};
+  closeEditor();
+  G.screen='world';
+}
+
+// ── Download ──
+function downloadEditor(){
+  const mapData={};
+  [1,2,3,'high','hive','pc'].forEach(z=>{
+    if(MAPS[z]) mapData[z]=Array.from(MAPS[z]).map(row=>Array.from(row));
+  });
+  const src=document.documentElement.outerHTML;
+  const inject=`<script>
+(function(){
+  const overrides=${JSON.stringify(mapData)};
+  const _orig=buildMap;
+  window.buildMap=function(z){
+    if(overrides[z]) return overrides[z].map(row=>new Uint8Array(row));
+    return _orig(z);
+  };
+})();
+<\/script>`;
+  const finalHtml=src.replace('</body>',inject+'</body>');
+  const blob=new Blob([finalHtml],{type:'text/html'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download='king-of-the-bugs.html';a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── Custom tile walkable/encounter override ──
+(function(){
+  const _origWalkable=walkable,_origIsEncounter=isEncounter;
+  window.walkable=function(t){
+    if(t>=CUSTOM_TILE_BASE){const ct=CUSTOM_TILE_REG[t-CUSTOM_TILE_BASE];return ct?!ct.solid:true;}
+    return _origWalkable(t);
+  };
+  window.isEncounter=function(t){
+    if(t>=CUSTOM_TILE_BASE){const ct=CUSTOM_TILE_REG[t-CUSTOM_TILE_BASE];return ct?ct.enc:false;}
+    return _origIsEncounter(t);
+  };
+})();
+
+function drawEditor(){
+  X.fillStyle='#0a0c10';X.fillRect(0,0,480,432);
+  T('Editor open →',240,216,5,'#304050','center');
+  edRender();
+}
+function drawEditorWarp(){G.screen='editor';}
+
+
+
+
 
 </script>
 </body>
