@@ -275,7 +275,10 @@ const G={
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, honey:0, madHoney:0},
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, jumpBeans:0, jumpBeansSteps:0, honey:0, madHoney:0},
+  spaceshipCrewDefeated:false,
+  spaceshipReturn:null,
+  sudoku:null,
   beeNestTrees:{checked:{}},
   // Rake system
   rake:{
@@ -310,6 +313,8 @@ const G={
   pendingItemReward:null, // {name, desc} for item reward screen
   bugdexScroll:0,
   loadoutScroll:0,
+  bagScroll:0,
+  zoneNameTimer:0,
   holder:{partyIndex:0,partyScroll:0,storageScroll:0,msg:''},
 };
 
@@ -507,7 +512,7 @@ function getSlotInfo(n){
 }
 
 const SAVE_VERSION = 2;
-const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0};
+const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, jumpBeans:0, jumpBeansSteps:0, honey:0, madHoney:0};
 
 function clonePlain(value, fallback){
   if(value === undefined || value === null) return fallback;
@@ -575,7 +580,7 @@ function normalizeSavedLoadout(saved){
 }
 
 function resetAllMaps(){
-  [1,2,3,'high','hive','shrine','pc'].forEach(z=>resetMap(z));
+  [1,2,3,'high','hive','shrine','pc','spaceship'].forEach(z=>resetMap(z));
 }
 
 function getSaveData(){
@@ -609,6 +614,13 @@ function getSaveData(){
     bugdexScroll: G.bugdexScroll || 0,
     loadoutScroll:G.loadoutScroll || 0,
     _uid:         _uidCounter,
+    alienActive:  !!(G.alien && G.alien.active),
+    alienPhase:   G.alien ? G.alien.phase : null,
+    alienReturnZone: G.alienReturnZone,
+    alienReturnX:    G.alienReturnX,
+    alienReturnY:    G.alienReturnY,
+    spaceshipCrewDefeated: !!G.spaceshipCrewDefeated,
+    sudoku: clonePlain(G.sudoku, null),
   };
 }
 
@@ -619,7 +631,11 @@ function saveToSlot(n){
     saveFlashMsg   = `✓  Saved to "${G.saveName||'Trainer'}"`;
     saveFlashTimer = 150; // ~2.5 sec at 60fps
     sfx && sfx('heal');
-  } catch(e){ console.warn('Save failed', e); }
+  } catch(e){
+    console.warn('Save failed', e);
+    saveFlashMsg   = '✗  Save failed — storage unavailable';
+    saveFlashTimer = 200;
+  }
 }
 
 function loadFromSlot(n){
@@ -636,6 +652,7 @@ function loadFromSlot(n){
     if(!d.storage && G.loadout.length>6) G.storage = G.loadout.splice(6);
     G.seen         = new Set([...(d.seen || []), ...G.loadout.map(inst => inst.id), ...G.storage.map(inst => inst.id)]);
     G.zone         = d.zone || 1;
+    showZoneName(G.zone);
     G.prevZone     = d.prevZone || (typeof G.zone==='number' ? G.zone : 1);
     G.unlockedZones= new Set(d.unlockedZones || [1]);
     if(d.player){
@@ -676,6 +693,21 @@ function loadFromSlot(n){
     if(G.boatmanTraded){
       const trader = NPCS.find(npc => npc.isTrader);
       if(trader) trader.defeated = true;
+    }
+    G.alienReturnZone = d.alienReturnZone !== undefined ? d.alienReturnZone : G.zone;
+    G.alienReturnX = d.alienReturnX !== undefined ? d.alienReturnX : G.player.x;
+    G.alienReturnY = d.alienReturnY !== undefined ? d.alienReturnY : G.player.y;
+    G.spaceshipCrewDefeated = !!d.spaceshipCrewDefeated;
+    G.sudoku = d.sudoku ? clonePlain(d.sudoku, null) : null;
+    if(d.alienActive && d.alienPhase){
+      G.alien = G.alien || {};
+      G.alien.active = true;
+      G.alien.phase = d.alienPhase;
+      G.alien.overlayAlpha = 0;
+      G.alien.countdownActive = false;
+      G.alien.spaceScrollY = G.alien.spaceScrollY || 0;
+    } else if(!d.alienActive){
+      G.alien = null;
     }
     resetAllMaps();
     G.battleParty = buildBattleParty();
@@ -1423,13 +1455,13 @@ function buildMap(z){
   return m;
 }
 
-function getMap(z){if(!MAPS[z])MAPS[z]=buildMap(z);return MAPS[z];}
+function getMap(z){if(!MAPS[z])MAPS[z]= z==='spaceship' ? buildSpaceshipMap() : buildMap(z);return MAPS[z];}
 function gt(z,tx,ty){
   if(tx<0||ty<0||tx>=WIDE||ty>=TALL)return 2;
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43;}
 function isEncounter(t){return t===1||t===7||t===9||t===27||t===30;}
 function isWater(t){return t===7;}
 
@@ -1540,7 +1572,7 @@ function drawTile(tile,sx,sy,tx,ty){
       X.fillStyle='rgba(255,240,100,0.5)';X.fillRect(sx+4,sy+4+pf,8,8-Math.abs(pf)|0);}break;
     case 7: { // pond — check if raked
       X.fillStyle='#1848a8';X.fillRect(sx,sy,TW,TW);
-      var rp=Math.sin(G.tick*.04+tx*.8+ty*.5)*1.5;
+      const rp=Math.sin(G.tick*.04+tx*.8+ty*.5)*1.5;
       X.fillStyle='rgba(80,160,255,0.35)';X.fillRect(sx+1,sy+4+rp,14,2);X.fillRect(sx+3,sy+10+rp,10,2);
       X.fillStyle='rgba(180,220,255,0.2)';X.fillRect(sx,sy+7,16,1);
       if(G.rake&&G.rake.rakedTiles&&G.rake.rakedTiles[tx+','+ty]){
@@ -1551,7 +1583,7 @@ function drawTile(tile,sx,sy,tx,ty){
       break;}
     case 20: { // white boat tile
       X.fillStyle='#1848a8';X.fillRect(sx,sy,TW,TW);
-      var bp=Math.sin(G.tick*.06+tx*.4)*1.2;
+      const bp=Math.sin(G.tick*.06+tx*.4)*1.2;
       const hasLeft=gt(G.zone,tx-1,ty)===20;
       const hasRight=gt(G.zone,tx+1,ty)===20;
       X.fillStyle='rgba(80,160,255,0.35)';X.fillRect(sx+1,sy+4+bp,14,2);X.fillRect(sx+3,sy+11+bp,10,2);
@@ -1628,9 +1660,9 @@ function drawTile(tile,sx,sy,tx,ty){
       break;}
     case 9: // mushroom field
       X.fillStyle='#301828';X.fillRect(sx,sy,TW,TW);
-      {var seed=(tx*31+ty*17)%8;
-      var caps=['#e03020','#f8a000','#d060d0','#4080e0','#20c040','#e06020','#c030a0','#80d0a0'];
-      var cap=caps[seed],ch=4+seed%3,ox2=sx+(seed%5)*2;
+      {const seed=(tx*31+ty*17)%8;
+      const caps=['#e03020','#f8a000','#d060d0','#4080e0','#20c040','#e06020','#c030a0','#80d0a0'];
+      const cap=caps[seed],ch=4+seed%3,ox2=sx+(seed%5)*2;
       X.fillStyle='#d8d0b8';X.fillRect(ox2+4,sy+ch+3,4,TW-ch-4);
       X.fillStyle=cap;X.fillRect(ox2+1,sy+3,12,ch);X.fillRect(ox2,sy+3+(ch/2)|0,14,(ch/2)|0);
       X.fillStyle='rgba(255,255,255,0.4)';X.fillRect(ox2+2,sy+3,4,2);}break;
@@ -2088,7 +2120,7 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 // WORLD DRAW
 // ═══════════════════════════════════════════════
-const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM"};
+const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD'};
 
 function snapPlayerToTile(){
   const p=G.player;
@@ -2106,6 +2138,49 @@ function openMenuFromWorld(){
 
 function drawWorld(){
   const p=G.player,map=getMap(G.zone);
+
+  // ── SPACESHIP ZONE — separate renderer ──
+  if(G.zone === 'spaceship'){
+    if(p.visX===undefined) p.visX=p.x;
+    if(p.visY===undefined) p.visY=p.y;
+    const camX=p.visX-240+8, camY=p.visY-216+8;
+
+    if(G.moveDelay > 0) G.moveDelay--;
+    const visAtTile = Math.abs(p.visX-p.x)<0.5 && Math.abs(p.visY-p.y)<0.5;
+    if(visAtTile && G.moveDelay===0 && G.screen==='world'){
+      let dx=0,dy=0;
+      if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
+      else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
+      else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;p.dir=3;}
+      else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1;p.dir=1;}
+      if(dx||dy){
+        const nx=p.x+dx*TW, ny=p.y+dy*TW;
+        const tx=Math.round(nx/TW), ty=Math.round(ny/TW);
+        const tile=gt('spaceship',tx,ty);
+        if(walkable(tile)){p.x=nx;p.y=ny; countBugStep();}
+      }
+    }
+    const _spd=1.4;
+    const _dx=p.x-p.visX, _dy=p.y-p.visY;
+    if(Math.abs(_dx)>0.4) p.visX+=Math.sign(_dx)*Math.min(_spd,Math.abs(_dx)); else p.visX=p.x;
+    if(Math.abs(_dy)>0.4) p.visY+=Math.sign(_dy)*Math.min(_spd,Math.abs(_dy)); else p.visY=p.y;
+
+    drawSpaceshipWorld(camX, camY);
+    drawPlayer(X, p.visX-camX, p.visY-camY, p.dir, p.frame, false);
+
+    if(G.pcMsgTimer>0){
+      G.pcMsgTimer--;
+      drawPcMsg();
+    }
+
+    updateAlien();
+    if(G.screen==='spaceship_return') updateSpaceshipReturn();
+    drawWorldHUD();
+    BTN(348,4,128,26,'MENU',openMenuFromWorld);
+    drawSaveToast();
+    return;
+  }
+
   if(p.visX===undefined) p.visX=p.x;
   if(p.visY===undefined) p.visY=p.y;
   const camX=p.visX-240+8,camY=p.visY-216+8;
@@ -2116,11 +2191,15 @@ function drawWorld(){
   if(G.moveDelay > 0) G.moveDelay--;
   const visAtTile = Math.abs(p.visX - p.x) < 0.5 && Math.abs(p.visY - p.y) < 0.5;
   if(visAtTile && G.moveDelay === 0 && !G.pig.searching){
+    const alienLocked = G.alien && G.alien.active &&
+      ['overlay_in','alien_appears','dialog','ship_landing','ship_escort','enter_ship'].includes(G.alien.phase);
     let dx=0,dy=0;
-    if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
-    else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
-    else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;p.dir=3;}
-    else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1;p.dir=1;}
+    if(!alienLocked){
+      if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
+      else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
+      else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;p.dir=3;}
+      else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1;p.dir=1;}
+    }
     if(dx||dy){
       const nx=p.x+dx*TW,ny=p.y+dy*TW;
       const tx=Math.round(nx/TW),ty=Math.round(ny/TW);
@@ -2266,6 +2345,10 @@ function drawWorld(){
 
   drawPlayer(X,p.visX-camX,p.visY-camY,p.dir,p.frame,inWater);
 
+  // Alien encounter overlay (mad honey)
+  drawAlienOverlay(camX, camY);
+  updateAlien();
+
   // Pig search animation (runs over world, player frozen)
   if(G.pig.searching) updatePig(camX, camY);
   // Escort cutscene update
@@ -2287,13 +2370,7 @@ function drawWorld(){
   // PC message
   if(G.pcMsgTimer>0){
     G.pcMsgTimer--;
-    const msgLines=G.pcMsg.split('\n');
-    const msgH=Math.max(90,34+msgLines.length*22);
-    panel(40,160,400,msgH,'#f8f8e8');
-    msgLines.forEach((l,i)=>T(l,60,190+i*22,7,'#303848'));
-    // Dismiss prompt
-    if(Math.floor(G.tick/18)%2===0) T('▼',428,160+msgH-8,8,'#909898','right');
-    G.buttons.push({x:40,y:160,w:400,h:msgH,label:'pcmsg_dismiss',action:()=>{G.pcMsgTimer=0;}});
+    drawPcMsg();
   }
 
   drawWorldHUD();
@@ -2424,9 +2501,10 @@ function drawHatch(){
   const h=G.pendingHatch;
   if(!h){G.screen='world';return;}
   const isMonarch=h.species==='monarch';
-  const fromName=isMonarch?'COCOON':'SILK COCOON';
-  const toName=isMonarch?'MONARCH':'SILK MOTH';
-  const toId=isMonarch?'monarch':'silkmoth';
+  const isBean=h.species==='beanmoth';
+  const fromName=isBean?'INTERGALACTIC\nJUMPING BEANS':(isMonarch?'COCOON':'SILK COCOON');
+  const toName=isBean?'INTERGALACTIC\nBEAN MOTH':(isMonarch?'MONARCH':'SILK MOTH');
+  const toId=isBean?'beanmoth':(isMonarch?'monarch':'silkmoth');
 
   // Animated sparkle bg
   X.fillStyle='#0e1030';X.fillRect(0,0,480,432);
@@ -2448,7 +2526,8 @@ function drawHatch(){
   // Left: cocoon
   X.fillStyle='rgba(200,180,140,0.3)';X.fillRect(40,100,180,220);
   T(fromName,130,118,5,'#907060','center');
-  if(isMonarch) spCocoon(X,130,220,3,false);
+  if(isBean) drawJumpBeansSprite(X,130,220,2.2);
+  else if(isMonarch) spCocoon(X,130,220,3,false);
   else spSilkCocoon(X,130,220,3,false);
 
   // Arrow
@@ -2501,6 +2580,16 @@ function countBugStep(){
       sfx('levelup');
     }
   }
+  if((G.inventory.jumpBeans||0)>0){
+    G.inventory.jumpBeansSteps=(G.inventory.jumpBeansSteps||0)+1;
+    if(G.inventory.jumpBeansSteps>=1679){
+      G.inventory.jumpBeans--;
+      G.inventory.jumpBeansSteps=0;
+      G.pendingHatch={species:'beanmoth'};
+      G.screen='hatch';
+      sfx('levelup');
+    }
+  }
 }
 
 function doPortal(tx,ty){
@@ -2510,16 +2599,17 @@ function doPortal(tx,ty){
   // Northward entries land at the BOTTOM (row TALL-3), facing north.
   if(G.zone===1&&ty===TALL-2){G.zone=2;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(2);sfx('portal');onEnterZone(2);}
   else if(G.zone===2&&ty===1){G.zone=1;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(1);sfx('portal');onEnterZone(1);}
-  else if(G.zone===2&&ty===TALL-2){G.zone=3;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(3);sfx('portal');}
+  else if(G.zone===2&&ty===TALL-2){G.zone=3;p.x=14*TW;p.y=2*TW;p.dir=2;resetMap(3);sfx('portal');showZoneName(3);}
   else if(G.zone===3&&ty===1){G.zone=2;p.x=14*TW;p.y=(TALL-3)*TW;p.dir=0;resetMap(2);sfx('portal');onEnterZone(2);}
-  else if(G.zone===3&&tx<=1){G.zone='hive';resetMap('hive');p.x=(WIDE-3)*TW;p.y=13*TW;p.dir=3;sfx('portal');
+  else if(G.zone===3&&tx<=1){G.zone='hive';resetMap('hive');p.x=(WIDE-3)*TW;p.y=13*TW;p.dir=3;sfx('portal');showZoneName('hive');
     G.pcMsg='You step through\ninto THE HIVE.\nFlowers everywhere.\nBuzzing in the air.';G.pcMsgTimer=240;}
-  else if(G.zone==='hive'&&tx>=WIDE-2){G.zone=3;p.x=2*TW;p.y=14*TW;p.dir=1;resetMap(3);sfx('portal');}
+  else if(G.zone==='hive'&&tx>=WIDE-2){G.zone=3;p.x=2*TW;p.y=14*TW;p.dir=1;resetMap(3);sfx('portal');showZoneName(3);}
   // Hive interior → shrine room (top of hive interior)
   else if(G.zone==='hive'){
     // Mound entrance at (14,16) and (15,16)
     if((tx===14||tx===15)&&ty===16){
       G.zone='shrine'; resetMap('shrine'); p.x=14*TW; p.y=(TALL-6)*TW; p.dir=0; sfx('portal');
+      showZoneName('shrine');
       if(!G.shrineVisited){
         G.shrineVisited=true;
         G.pcMsg='QUEEN BEE:\n"My children...\nWhere are they?\nBring me my children\nand I shall bless you."';
@@ -2528,35 +2618,42 @@ function doPortal(tx,ty){
     }
   }
   // Shrine room → hive
-  else if(G.zone==='shrine'&&ty>=TALL-5&&(tx===14||tx===15)){G.zone='hive';resetMap('hive');p.x=14*TW;p.y=18*TW;p.dir=2;sfx('portal');}
+  else if(G.zone==='shrine'&&ty>=TALL-5&&(tx===14||tx===15)){G.zone='hive';resetMap('hive');p.x=14*TW;p.y=18*TW;p.dir=2;sfx('portal');showZoneName('hive');}
   p.visX=p.x; p.visY=p.y;
   G.moveDelay=14;
 }
 
 function drawWorldHUD(){
-  // Top-left lead-bug panel intentionally omitted —
-  // bug stats live in Loadout and Battle screens.
-  // Bottom-left: zone name + caught count
-  if(G.zone!=='pc'){
-    const zName=ZN[G.zone]||'';
-    const zBugs=Object.keys(BUGS).filter(k=>BUGS[k].zone===G.zone);
-    const zC=zBugs.filter(k=>G.seen.has(k)).length;
-    const catchStr=zBugs.length?`Caught: ${zC}/${zBugs.length}`:'';
-    const panelW=148;
-    panel(4,404,panelW,28);
-    T(zName,10,418,6,'#303848');
-    if(catchStr)T(catchStr,10,426,5,'#607080');
-  } else {
-    panel(4,404,190,28);
-    T('FIELD LAB',10,418,6,'#2050a8');
-    T('press A at desk to heal',10,426,4,'#607080');
+  // ── Zone name toast — top-left, shown for 5 s after entering a zone ──
+  if(G.zoneNameTimer > 0){
+    G.zoneNameTimer--;
+    const zName = ZN[G.zone] || '';
+    if(zName){
+      // Fade out in last 60 frames
+      const alpha = G.zoneNameTimer < 60 ? G.zoneNameTimer / 60 : 1;
+      X.save();
+      X.globalAlpha = alpha;
+      // Pill background
+      const PAD_X = 10, PAD_Y = 6;
+      const textW = zName.length * 7 + PAD_X * 2; // approximate
+      const boxW = Math.max(100, textW);
+      X.fillStyle = 'rgba(10,12,20,0.78)';
+      X.fillRect(6, 6, boxW, 22);
+      X.strokeStyle = 'rgba(255,255,255,0.18)';
+      X.lineWidth = 1;
+      X.strokeRect(6, 6, boxW, 22);
+      T(zName, 12, 21, 6, '#f8f8e8');
+      X.globalAlpha = 1;
+      X.restore();
+    }
   }
+
   // Run indicator
   if(G.running){
     X.fillStyle='rgba(255,200,50,0.85)';
-    X.fillRect(156,404,50,28);
-    X.strokeStyle='#303848';X.lineWidth=2;X.strokeRect(156,404,50,28);
-    T('RUN',181,422,7,'#303848','center');
+    X.fillRect(4,404,50,28);
+    X.strokeStyle='#303848';X.lineWidth=2;X.strokeRect(4,404,50,28);
+    T('RUN',29,422,7,'#303848','center');
   }
   // Editor test mode — return button top-right
   if(G.editorTestMode){
@@ -3104,7 +3201,7 @@ function drawSwapMenu(){
     const by=padY+row*(cardH+6);
     const isActive=i===0;
     const fainted=bug.hp<=0;
-    const canPick=!isActive&&!fainted&&!forced||(!isActive&&!fainted&&forced);
+    const canPick=!isActive&&!fainted;
 
     // Card bg
     X.fillStyle=fainted?'#282030':isActive?'#1a3050':'#1a2840';
@@ -3463,8 +3560,14 @@ function afterResult(){
         // Don't mark NPC defeated yet; we'll do that after the player sees the reward screen.
         G.battlePhase = 'trainer-defeat';
         G.trainerAnimT = 0;
-        G.pendingReward = tr.rewardId || null;
-        G.battleMsg = tr.name + ':\n' + (tr.npc.afterMsg || ('Good fight!\nTake my ' + (tr.rewardId ? BUGS[tr.rewardId].name : 'thanks!') + '.'));
+        if(tr.npc && tr.npc.isAlienCrew){
+          awardAlienCrewBeans();
+          G.pendingReward = null;
+          G.battleMsg = tr.name + ':\n' + tr.npc.afterMsg;
+        } else {
+          G.pendingReward = tr.rewardId || null;
+          G.battleMsg = tr.name + ':\n' + (tr.npc.afterMsg || ('Good fight!\nTake my ' + (tr.rewardId ? BUGS[tr.rewardId].name : 'thanks!') + '.'));
+        }
         return;
       }
     }
@@ -3571,6 +3674,15 @@ function getTalkNPC(){
 function doZAction(allowRake=true){
   // Z = interact with facing tile/NPC, or rake if standing in water with rake
   const p=G.player, tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
+
+  // Spaceship interior interactions
+  if(G.zone === 'spaceship' && G.screen === 'world'){
+    const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
+    const[ddx,ddy]=dirs[p.dir]||[0,1];
+    interactSpaceshipTile(tx+ddx, ty+ddy);
+    return;
+  }
+
   const curTile=gt(G.zone,tx,ty);
   // Rake if standing in water with the rake equipped
   if(allowRake && G.inventory.lakeRake && isWater(curTile)){ doRakeAction(); return; }
@@ -3613,6 +3725,10 @@ function interactWithFacingNPC(){
   return true;
 }
 function openTrainerReward(){
+  if(G.pendingItemReward){
+    G.screen='item_reward';
+    return;
+  }
   if(G.pendingReward){
     G.screen='reward';
     return;
@@ -3734,6 +3850,7 @@ function updateEscort(){
     p.visX=p.x; p.visY=p.y;
     G.moveDelay=20;
     sfx('portal');
+    showZoneName('hive');
     G.pcMsg='RIVAL JESSE:\n"...there it is.\nThe HIVE.\nI\'ll head back.\nGood luck."';
     G.pcMsgTimer=300;
   }
@@ -3746,6 +3863,1123 @@ function drawEscortNPC(camX, camY){
   const sy=e.escortY-camY;
   if(sx<-32||sx>512||sy<-32||sy>464) return;
   drawNPCSprite(X,sx,sy,e.npcSprite||'rival',3,false);
+}
+
+// ═══════════════════════════════════════════════
+// MAD HONEY — ALIEN ENCOUNTER + SPACESHIP
+// ═══════════════════════════════════════════════
+
+// State lives in G.alien:
+// { active, phase, alienX, alienY, shipX, shipY, shipLandTimer, shipLandDone,
+//   dialogIdx, escortStep, escortTimer, overlayAlpha, overlayTarget,
+//   countdownTimer, countdownPhase, spaceScrollY }
+// Phases: 'overlay_in' → 'alien_appears' → 'dialog' → 'ship_landing' →
+//         'ship_escort' → 'spaceship' → 'countdown' → 'space_flight' → 'space'
+
+const ALIEN_DIALOG = [
+  "I have always been here.\nYou simply lacked the eyes\nto see me.",
+  "The honey opens a door\nthat was never locked.\nOnly forgotten.",
+  "We have watched your world\nfold and unfold\nfor a very long time.",
+  "Come. My vessel waits.\nThere is something\nbeyond worth showing you.",
+];
+
+const ALIEN_SHIP_MAP_SIZE = { w: 30, h: 27 };
+
+function eatMadHoney(){
+  if(!(G.inventory.madHoney > 0)) return;
+  G.inventory.madHoney--;
+  G.alienReturnZone = G.zone;
+  G.alienReturnX = G.player.x;
+  G.alienReturnY = G.player.y;
+  G.alien = {
+    active: true,
+    phase: 'overlay_in',
+    alienX: (G.player.x / TW + 5) * TW,
+    alienY: G.player.y,
+    shipX: (WIDE / 2) * TW,
+    shipY: 2 * TW,
+    shipLandTimer: 0,
+    shipLanded: false,
+    dialogIdx: 0,
+    escortStep: 0,
+    escortTimer: 0,
+    overlayAlpha: 0,
+    overlayTarget: 0.72,
+    countdownNum: 3,
+    countdownTimer: 0,
+    spaceScrollY: 0,
+  };
+  sfx && sfx('portal');
+}
+
+function updateAlien(){
+  const al = G.alien;
+  if(!al || !al.active || G.screen !== 'world') return;
+
+  if(al.phase === 'overlay_in'){
+    al.overlayAlpha = Math.min(al.overlayTarget, al.overlayAlpha + 0.018);
+    if(al.overlayAlpha >= al.overlayTarget) {
+      al.phase = 'alien_appears';
+      G.pcMsg = 'Something stirs\nat the edge of sight...';
+      G.pcMsgTimer = 120;
+    }
+    return;
+  }
+
+  if(al.phase === 'alien_appears'){
+    if(G.pcMsgTimer <= 0) {
+      al.phase = 'dialog';
+      al.dialogIdx = 0;
+      G.pcMsg = 'STRANGER:\n"' + ALIEN_DIALOG[0] + '"';
+      G.pcMsgTimer = 280;
+    }
+    return;
+  }
+
+  if(al.phase === 'dialog'){
+    if(G.pcMsgTimer <= 0){
+      al.dialogIdx++;
+      if(al.dialogIdx < ALIEN_DIALOG.length){
+        G.pcMsg = 'STRANGER:\n"' + ALIEN_DIALOG[al.dialogIdx] + '"';
+        G.pcMsgTimer = 280;
+      } else {
+        al.phase = 'ship_landing';
+        al.shipLandTimer = 0;
+        G.pcMsg = 'A low hum fills the air.\nThe sky bends.';
+        G.pcMsgTimer = 140;
+        sfx && sfx('encounter');
+      }
+    }
+    return;
+  }
+
+  if(al.phase === 'ship_landing'){
+    al.shipLandTimer++;
+    // Ship descends over ~180 frames from above-screen to mid-field
+    const targetY = 8 * TW;
+    const startY = -6 * TW;
+    const prog = Math.min(1, al.shipLandTimer / 180);
+    // Ease-out cubic
+    const ease = 1 - Math.pow(1 - prog, 3);
+    al.shipY = startY + (targetY - startY) * ease;
+    if(al.shipLandTimer >= 180 && !al.shipLanded){
+      al.shipLanded = true;
+      sfx && sfx('portal');
+      G.pcMsg = 'STRANGER:\n"Follow me.\nDo not be afraid."';
+      G.pcMsgTimer = 200;
+    }
+    if(al.shipLanded && G.pcMsgTimer <= 0){
+      al.phase = 'ship_escort';
+      al.escortStep = 0;
+      al.escortTimer = 0;
+    }
+    return;
+  }
+
+  if(al.phase === 'ship_escort'){
+    // Walk alien + player toward the ship landing spot
+    al.escortTimer++;
+    const shipTX = Math.round(al.shipX / TW);
+    const shipTY = Math.round(al.shipY / TW) + 3;
+    const alienTargetX = shipTX * TW;
+    const alienTargetY = shipTY * TW;
+    const spd = 1.5;
+
+    const adx = alienTargetX - al.alienX;
+    const ady = alienTargetY - al.alienY;
+    if(Math.abs(adx) > 2 || Math.abs(ady) > 2){
+      al.alienX += Math.sign(adx) * Math.min(spd, Math.abs(adx));
+      al.alienY += Math.sign(ady) * Math.min(spd, Math.abs(ady));
+    }
+
+    // Force player to trail alien
+    const pTargetX = al.alienX + 2 * TW;
+    const pTargetY = al.alienY;
+    const pdx = pTargetX - G.player.x;
+    const pdy = pTargetY - G.player.y;
+    if(Math.abs(pdx) > TW * 0.5 || Math.abs(pdy) > TW * 0.5){
+      G.player.x += Math.sign(pdx) * Math.min(spd, Math.abs(pdx));
+      G.player.y += Math.sign(pdy) * Math.min(spd, Math.abs(pdy));
+      G.player.dir = Math.abs(pdx) > Math.abs(pdy) ? (pdx < 0 ? 3 : 1) : (pdy < 0 ? 0 : 2);
+      G.player.visX = G.player.x; G.player.visY = G.player.y;
+      if(al.escortTimer % 8 === 0) G.player.frame = (G.player.frame||0)+1;
+    }
+
+    // Once close enough, warp into ship
+    if(Math.abs(adx) < 4 && Math.abs(ady) < 4){
+      al.phase = 'enter_ship';
+      G.pcMsg = 'The door slides open.\nThe air smells like\npurple mathematics.';
+      G.pcMsgTimer = 180;
+    }
+    return;
+  }
+
+  if(al.phase === 'enter_ship'){
+    if(G.pcMsgTimer <= 0){
+      // Transition to spaceship zone
+      al.phase = 'spaceship';
+      al.countdownNum = 3;
+      al.countdownTimer = 0;
+      al.spaceScrollY = 0;
+      G.prevZone = G.zone;
+      G.zone = 'spaceship';
+      const p = G.player;
+      p.x = 14 * TW; p.y = 22 * TW; p.dir = 0;
+      p.visX = p.x; p.visY = p.y;
+      sfx && sfx('portal');
+      showZoneName('spaceship');
+      G.pcMsg = 'STRANGER:\n"Welcome aboard.\nExplore freely.\nThe stars can wait."';
+      G.pcMsgTimer = 240;
+    }
+    return;
+  }
+
+  if(al.phase === 'spaceship'){
+    // Explore the ship freely — liftoff/countdown disabled until a future prompt
+    return;
+  }
+
+  if(al.phase === 'liftoff'){
+    al.liftoffTimer = (al.liftoffTimer||0) + 1;
+    al.spaceScrollY = (al.spaceScrollY||0) + al.liftoffTimer * 0.04;
+    if(al.liftoffTimer > 240){
+      al.phase = 'space';
+      G.pcMsg = 'STRANGER:\n"Look outside.\nYou are the first\nof your kind\nto see this."';
+      G.pcMsgTimer = 320;
+    }
+    return;
+  }
+
+  if(al.phase === 'space'){
+    al.spaceScrollY = (al.spaceScrollY||0) + 0.8;
+    return;
+  }
+}
+
+function drawAlienOverlay(camX, camY){
+  const al = G.alien;
+  if(!al || !al.active) return;
+
+  // Green psychedelic tint over the world
+  if(al.overlayAlpha > 0 && al.phase !== 'enter_ship' && al.phase !== 'spaceship' && al.phase !== 'liftoff' && al.phase !== 'space'){
+    const pulse = 0.08 * Math.sin(G.tick * 0.05);
+    X.save();
+    X.globalAlpha = al.overlayAlpha + pulse;
+    // Saturated green overlay
+    X.fillStyle = 'rgba(40, 255, 80, 0.38)';
+    X.fillRect(0, 0, GAME_W, GAME_H);
+    // Lighter luminous wash
+    X.fillStyle = 'rgba(200, 255, 160, 0.18)';
+    X.fillRect(0, 0, GAME_W, GAME_H);
+    // Scan-line shimmer
+    for(let y = 0; y < GAME_H; y += 4){
+      X.fillStyle = `rgba(80,255,120,${0.04 + 0.03 * Math.sin(G.tick * 0.08 + y * 0.1)})`;
+      X.fillRect(0, y, GAME_W, 2);
+    }
+    X.globalAlpha = 1;
+    X.restore();
+
+    // Draw alien NPC sprite
+    const asx = al.alienX - camX;
+    const asy = al.alienY - camY;
+    if(asx > -40 && asx < GAME_W + 40 && asy > -40 && asy < GAME_H + 40){
+      drawAlienSprite(X, asx, asy, 1.0);
+    }
+
+    // Draw descending ship during ship_landing phase
+    if(al.phase === 'ship_landing' || al.phase === 'ship_escort' || al.phase === 'enter_ship'){
+      const ssx = al.shipX - camX;
+      const ssy = al.shipY - camY;
+      drawAlienShipSprite(X, ssx, ssy, 1.0);
+    }
+  }
+}
+
+function drawAlienSprite(ctx, cx, cy, s){
+  ctx.save();
+  // Pulsing glow aura
+  const glow = 0.4 + 0.25 * Math.sin(G.tick * 0.09);
+  ctx.globalAlpha = glow;
+  ctx.fillStyle = 'rgba(80,255,120,1)';
+  ctx.beginPath(); ctx.arc(cx, cy - 14, 20 * s, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Body — tall, thin, luminous
+  ctx.fillStyle = '#b0ffc8'; ctx.fillRect(cx - 5*s, cy - 28*s, 10*s, 22*s);
+  ctx.fillStyle = '#d8ffe8'; ctx.fillRect(cx - 3*s, cy - 26*s, 6*s, 16*s);
+  // Neck
+  ctx.fillStyle = '#80e8a0'; ctx.fillRect(cx - 3*s, cy - 6*s, 6*s, 6*s);
+  // Head — big oval
+  ctx.fillStyle = '#c8ffdc'; ctx.fillRect(cx - 9*s, cy - 40*s, 18*s, 16*s);
+  ctx.fillStyle = '#e8fff0'; ctx.fillRect(cx - 7*s, cy - 38*s, 14*s, 10*s);
+  // Giant black eyes
+  ctx.fillStyle = '#050820';
+  ctx.beginPath(); ctx.ellipse(cx - 5*s, cy - 32*s, 4*s, 5*s, -0.2, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx + 5*s, cy - 32*s, 4*s, 5*s,  0.2, 0, Math.PI*2); ctx.fill();
+  // Eye glint
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillRect(cx - 6*s, cy - 34*s, 2*s, 2*s);
+  ctx.fillRect(cx + 4*s, cy - 34*s, 2*s, 2*s);
+  // Long arms
+  ctx.fillStyle = '#90e8b0';
+  ctx.fillRect(cx - 12*s, cy - 24*s, 7*s, 3*s);
+  ctx.fillRect(cx + 5*s,  cy - 24*s, 7*s, 3*s);
+  // Legs
+  ctx.fillStyle = '#80d8a0';
+  ctx.fillRect(cx - 4*s, cy - 6*s, 3*s, 10*s);
+  ctx.fillRect(cx + 1*s, cy - 6*s, 3*s, 10*s);
+  // Feet
+  ctx.fillStyle = '#60c880';
+  ctx.fillRect(cx - 5*s, cy + 3*s, 5*s, 3*s);
+  ctx.fillRect(cx + 1*s, cy + 3*s, 5*s, 3*s);
+  ctx.restore();
+}
+
+function drawAlienShipSprite(ctx, cx, cy, s){
+  ctx.save();
+  const bob = Math.sin(G.tick * 0.04) * 3;
+  const y = cy + bob;
+  // Engine glow underneath
+  const glowR = 30 + 8 * Math.sin(G.tick * 0.1);
+  const grad = ctx.createRadialGradient(cx, y + 8, 2, cx, y + 8, glowR);
+  grad.addColorStop(0, 'rgba(120,255,180,0.7)');
+  grad.addColorStop(1, 'rgba(40,255,80,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, y + 8, glowR, 0, Math.PI*2); ctx.fill();
+
+  // Hull — saucer shape (ellipse via scaled arc)
+  ctx.save();
+  ctx.scale(1, 0.38);
+  ctx.fillStyle = '#304858';
+  ctx.beginPath(); ctx.arc(cx, (y + 4)/0.38, 44*s, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4a7090';
+  ctx.beginPath(); ctx.arc(cx, (y + 2)/0.38, 40*s, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // Dome on top
+  ctx.save();
+  ctx.scale(1, 0.7);
+  ctx.fillStyle = 'rgba(160,240,200,0.55)';
+  ctx.beginPath(); ctx.arc(cx, (y - 8)/0.7, 22*s, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(220,255,240,0.4)';
+  ctx.beginPath(); ctx.arc(cx - 6, (y - 10)/0.7, 10*s, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // Portholes
+  const portAngles = [-0.6, 0, 0.6];
+  portAngles.forEach(a => {
+    const px = cx + Math.cos(a) * 28 * s;
+    const py = y + 2 + Math.sin(a) * 6 * s;
+    ctx.fillStyle = `rgba(100,255,180,${0.6 + 0.3 * Math.sin(G.tick * 0.12 + a * 3)})`;
+    ctx.beginPath(); ctx.arc(px, py, 4*s, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.beginPath(); ctx.arc(px - 1, py - 1, 1.5*s, 0, Math.PI*2); ctx.fill();
+  });
+
+  // Landing legs (3 of them)
+  ctx.strokeStyle = '#4a7090'; ctx.lineWidth = 2*s;
+  const legAngles = [-0.5, 0, 0.5];
+  legAngles.forEach(a => {
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * 28*s, y + 6);
+    ctx.lineTo(cx + Math.cos(a) * 34*s, y + 16);
+    ctx.stroke();
+  });
+
+  ctx.restore();
+}
+
+// ─── SPACESHIP BIOME ───
+function buildSpaceshipMap(){
+  const m = Array.from({length: TALL}, () => new Uint8Array(WIDE));
+  // All solid wall by default
+  for(let y=0; y<TALL; y++) for(let x=0; x<WIDE; x++) m[y][x] = 2;
+  // Circular interior — radius ~10 centered at (14,13)
+  const cx = 14, cy = 13, r = 10;
+  for(let y=0; y<TALL; y++) for(let x=0; x<WIDE; x++){
+    const dist = Math.sqrt((x-cx)**2 + (y-cy)**2);
+    if(dist < r) m[y][x] = 40; // ship floor
+  }
+  // Central control platform
+  for(let y=10; y<=14; y++) for(let x=11; x<=17; x++) m[y][x] = 41; // console floor
+  for(let y=10; y<=11; y++) for(let x=11; x<=17; x++) m[y][x] = 42; // control bank (solid)
+  // Engine pillar
+  m[16][13] = 43; m[16][15] = 43; // engine nodes
+  // Entry hatch at bottom
+  m[22][14] = 44; m[22][13] = 44;
+  // Lab nook — metal table with erlenmeyer flask (east wall)
+  for(let y=13; y<=15; y++) m[y][20] = 41;
+  m[14][20] = 41; m[13][20] = 41;
+  // Meditation chair nook (west wall)
+  for(let y=14; y<=16; y++) m[y][8] = 40;
+  m[15][7] = 40;
+  // Alien puzzle console (south of command deck)
+  m[12][11] = 41; m[12][12] = 41;
+  // Windows — ring of porthole tiles around edge (decorative, walkable)
+  const wAngles = [0, 0.7, 1.4, 2.1, 2.8, 3.5, 4.2, 4.9, 5.6];
+  wAngles.forEach(a => {
+    const wx = Math.round(cx + Math.cos(a) * (r - 1.5));
+    const wy = Math.round(cy + Math.sin(a) * (r - 1.5));
+    if(wx>=0&&wx<WIDE&&wy>=0&&wy<TALL) m[wy][wx] = 45; // porthole tile
+  });
+  return m;
+}
+
+function drawTileSpaceship(tile, sx, sy, tx, ty){
+  const al = G.alien;
+  const scrollY = al ? (al.spaceScrollY||0) : 0;
+
+  if(tile === 40){ // Ship floor — dark metal plate
+    const checker = (tx + ty) % 2 === 0;
+    X.fillStyle = checker ? '#1a1e2a' : '#202430';
+    X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = 'rgba(60,120,180,0.12)';
+    X.fillRect(sx, sy, TW, 1); X.fillRect(sx, sy, 1, TW);
+    return;
+  }
+  if(tile === 41){ // Console floor — lit platform
+    X.fillStyle = '#1e2840';
+    X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = `rgba(80,200,255,${0.2 + 0.1 * Math.sin(G.tick*0.07 + tx*0.5)})`;
+    X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = 'rgba(120,220,255,0.15)';
+    X.fillRect(sx, sy, TW, 1); X.fillRect(sx, sy, 1, TW);
+    return;
+  }
+  if(tile === 42){ // Control bank (solid) — covered in buttons/screens
+    X.fillStyle = '#0e1420';
+    X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = '#182030';
+    X.fillRect(sx+1, sy+1, TW-2, TW-2);
+    // Mini screens
+    const col = [`rgba(0,200,255,${0.5+0.4*Math.sin(G.tick*0.08+tx)})`,
+                 `rgba(80,255,120,${0.5+0.4*Math.cos(G.tick*0.06+ty)})`,
+                 `rgba(255,200,0,${0.4+0.3*Math.sin(G.tick*0.1+tx+ty)})`];
+    X.fillStyle = col[(tx*3+ty)%3];
+    X.fillRect(sx+2, sy+3, 5, 4);
+    X.fillStyle = col[(tx+ty*2)%3];
+    X.fillRect(sx+9, sy+3, 5, 4);
+    // Blinking indicator lights
+    if(Math.sin(G.tick*0.14+tx*1.3)>0.4){ X.fillStyle='#ff4040'; X.fillRect(sx+4,sy+9,2,2); }
+    if(Math.sin(G.tick*0.11+ty*0.9)>0.3){ X.fillStyle='#40ff80'; X.fillRect(sx+9,sy+9,2,2); }
+    return;
+  }
+  if(tile === 43){ // Engine node — glowing pillar
+    X.fillStyle = '#101828';
+    X.fillRect(sx, sy, TW, TW);
+    const pulse = 0.5 + 0.5 * Math.abs(Math.sin(G.tick * 0.08 + tx * 1.2));
+    X.fillStyle = `rgba(40,200,255,${pulse * 0.9})`;
+    X.fillRect(sx+3, sy+1, 10, TW-2);
+    X.fillStyle = `rgba(180,240,255,${pulse})`;
+    X.fillRect(sx+6, sy+2, 4, TW-4);
+    return;
+  }
+  if(tile === 44){ // Entry hatch
+    X.fillStyle = '#1a1e28';
+    X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = '#2a3848';
+    X.fillRect(sx+2, sy+2, TW-4, TW-4);
+    X.fillStyle = 'rgba(80,255,120,0.5)';
+    X.fillRect(sx+4, sy+4, TW-8, TW-8);
+    return;
+  }
+  if(tile === 45){ // Porthole — see outside
+    const al2 = G.alien;
+    const liftPhase = al2 ? al2.phase : 'space';
+    const liftT2 = al2 ? (al2.liftoffTimer||0) : 9999;
+    const liftProg = Math.min(1, liftT2 / 240);
+
+    X.save();
+    X.beginPath(); X.rect(sx+1, sy+1, TW-2, TW-2); X.clip();
+
+    if(liftPhase === 'liftoff'){
+      // Sky colour transitions: blue → dark blue → black
+      const atmoProg = Math.min(1, liftProg / 0.75);
+      const r = Math.round(10 + (1-atmoProg)*20);
+      const g2 = Math.round(20 + (1-atmoProg)*80);
+      const b2 = Math.round(40 + (1-atmoProg)*160);
+      X.fillStyle = `rgb(${r},${g2},${b2})`;
+      X.fillRect(sx+1, sy+1, TW-2, TW-2);
+
+      // Ground scrolling downward through porthole
+      const groundProg = Math.min(1, liftProg / 0.4);
+      const groundOffset = groundProg * (TW + 8);
+      const groundLocalY = sy + TW/2 + groundOffset;
+      if(groundLocalY < sy + TW){
+        X.fillStyle = '#2a6818';
+        X.fillRect(sx+1, groundLocalY, TW-2, sy+TW-groundLocalY+1);
+        X.fillStyle = '#1e5010';
+        X.fillRect(sx+1, groundLocalY-3, TW-2, 4);
+      }
+
+      // Stars fade in
+      const starA = Math.max(0, (atmoProg - 0.3) / 0.7);
+      if(starA > 0){
+        for(let i=0; i<5; i++){
+          const stX = sx + 2 + (i*73+tx*41)%(TW-4);
+          const stY = sy + 2 + (i*47+ty*29)%(TW-4);
+          X.fillStyle = `rgba(255,255,255,${starA*(0.5+0.5*Math.abs(Math.sin(G.tick*0.04+i)))})`;
+          X.fillRect(stX, stY, 1, 1);
+        }
+      }
+
+      // Engine glow reflection at bottom of porthole
+      const thrustA = Math.min(1, liftProg*3) * (0.5+0.5*Math.abs(Math.sin(liftT2*0.18)));
+      X.fillStyle = `rgba(255,160,30,${thrustA*0.5})`;
+      X.fillRect(sx+1, sy+TW-5, TW-2, 5);
+
+    } else {
+      // Space phase — scrolling stars + planet
+      X.fillStyle = '#020408';
+      X.fillRect(sx+1, sy+1, TW-2, TW-2);
+      for(let i=0; i<8; i++){
+        const starX = sx + ((i*73 + tx*41) % (TW-4)) + 2;
+        const starY = sy + (((i*47 + ty*29 + scrollY*0.3)|0) % (TW-4)) + 2;
+        const bright = 0.4 + 0.6 * Math.abs(Math.sin(G.tick*0.04 + i*0.8));
+        X.fillStyle = `rgba(255,255,255,${bright})`;
+        X.fillRect(starX, starY, i%3===0?2:1, i%3===0?2:1);
+      }
+      if((tx+ty)%4===0){
+        const planetPulse = Math.sin(G.tick*0.02)*2;
+        X.fillStyle = 'rgba(80,140,255,0.7)';
+        X.beginPath(); X.arc(sx+12, sy+8+planetPulse, 5, 0, Math.PI*2); X.fill();
+        X.fillStyle = 'rgba(120,180,255,0.4)';
+        X.beginPath(); X.arc(sx+10, sy+7+planetPulse, 3, 0, Math.PI*2); X.fill();
+      }
+    }
+
+    X.restore();
+    // Porthole frame
+    X.strokeStyle = '#4a6888'; X.lineWidth = 2;
+    X.strokeRect(sx+1, sy+1, TW-2, TW-2);
+    return;
+  }
+  if(tile === 2){ // Ship wall — curved hull plating
+    X.fillStyle = '#080c14';
+    X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = '#10181f';
+    X.fillRect(sx+2, sy+2, TW-4, TW-4);
+    X.fillStyle = 'rgba(40,80,120,0.3)';
+    X.fillRect(sx, sy, TW, 2); X.fillRect(sx, sy, 2, TW);
+    return;
+  }
+  // Fallback
+  X.fillStyle = '#0a0e18'; X.fillRect(sx, sy, TW, TW);
+}
+
+function drawSpaceBackground(){
+  const al = G.alien;
+  const scrollY = al ? (al.spaceScrollY||0) : 0;
+  const phase = al ? al.phase : 'space';
+  const liftT = al ? (al.liftoffTimer||0) : 0;
+
+  // ── During liftoff: animated ground→sky→space transition ──
+  if(phase === 'liftoff'){
+    // prog 0→1 over 240 frames
+    const prog = Math.min(1, liftT / 240);
+
+    // ── Layer 1: Ground scenery scrolling downward off screen ──
+    // The "ground" viewport shifts down — at prog=0 ground fills bottom half,
+    // at prog=0.4 it's scrolled off the bottom edge.
+    const groundProg = Math.min(1, prog / 0.4);
+    const groundY = GAME_H * 0.55 + groundProg * (GAME_H * 0.7); // slides down
+
+    // Sky gradient (atmosphere) — blue at bottom fading to black at top
+    // At prog=0: rich blue; at prog=1: pure black
+    const atmoProg = Math.min(1, prog / 0.75);
+    const skyR = Math.round(10  + (1-atmoProg)*20);
+    const skyG = Math.round(20  + (1-atmoProg)*80);
+    const skyB = Math.round(40  + (1-atmoProg)*160);
+    const skyGrad = X.createLinearGradient(0, 0, 0, GAME_H);
+    skyGrad.addColorStop(0, `rgb(${skyR},${skyG},${skyB})`);
+    skyGrad.addColorStop(Math.min(1, 0.3 + atmoProg*0.5),
+      `rgb(${Math.round(skyR*0.4)},${Math.round(20+(1-atmoProg)*60)},${Math.round(skyB*0.6)})`);
+    skyGrad.addColorStop(1,
+      `rgb(${Math.round(40+(1-atmoProg)*60)},${Math.round(60+(1-atmoProg)*100)},${Math.round(20+(1-atmoProg)*60)})`);
+    X.fillStyle = skyGrad;
+    X.fillRect(0, 0, GAME_W, GAME_H);
+
+    // Draw ground surface — green rolling terrain scrolling down
+    if(groundY < GAME_H + 60){
+      // Ground base
+      X.fillStyle = '#2a6818';
+      X.fillRect(0, groundY, GAME_W, GAME_H - groundY + 20);
+      // Rolling hill silhouette
+      X.fillStyle = '#1e5010';
+      X.beginPath();
+      X.moveTo(0, groundY);
+      for(let x2=0; x2<=GAME_W; x2+=4){
+        const hy = groundY - 12 - 10*Math.sin(x2*0.022 + 0.5) - 6*Math.sin(x2*0.051 + 1.2);
+        x2===0 ? X.moveTo(x2, hy) : X.lineTo(x2, hy);
+      }
+      X.lineTo(GAME_W, GAME_H); X.lineTo(0, GAME_H); X.closePath(); X.fill();
+      // Tiny trees on the silhouette
+      for(let t=0; t<12; t++){
+        const tx2 = (t*53)%GAME_W;
+        const ty2 = groundY - 14 - 10*Math.sin(tx2*0.022+0.5) - 6*Math.sin(tx2*0.051+1.2) - 8;
+        X.fillStyle = '#1a4008';
+        X.beginPath(); X.arc(tx2, ty2, 5, 0, Math.PI); X.fill();
+        X.fillStyle = '#0e2e06';
+        X.beginPath(); X.arc(tx2, ty2-3, 3, 0, Math.PI); X.fill();
+      }
+      // Ground shadow edge
+      const shadowGrad = X.createLinearGradient(0, groundY-8, 0, groundY+4);
+      shadowGrad.addColorStop(0, 'rgba(0,0,0,0)');
+      shadowGrad.addColorStop(1, 'rgba(0,0,0,0.4)');
+      X.fillStyle = shadowGrad;
+      X.fillRect(0, groundY-8, GAME_W, 12);
+    }
+
+    // ── Engine thrust glow from bottom of screen ──
+    const thrustPulse = 0.7 + 0.3*Math.abs(Math.sin(liftT*0.18));
+    const thrustAlpha = Math.min(1, prog*2.5) * thrustPulse;
+    const thrustGrad = X.createRadialGradient(GAME_W/2, GAME_H+20, 5, GAME_W/2, GAME_H+20, 120);
+    thrustGrad.addColorStop(0,   `rgba(255,220,80,${thrustAlpha})`);
+    thrustGrad.addColorStop(0.3, `rgba(255,120,20,${thrustAlpha*0.7})`);
+    thrustGrad.addColorStop(0.7, `rgba(255,60,0,${thrustAlpha*0.3})`);
+    thrustGrad.addColorStop(1,   'rgba(255,0,0,0)');
+    X.fillStyle = thrustGrad;
+    X.fillRect(0, GAME_H/2, GAME_W, GAME_H/2 + 40);
+
+    // ── Stars fading in from top as atmosphere thins ──
+    const starAlpha = Math.max(0, atmoProg - 0.3) / 0.7;
+    if(starAlpha > 0){
+      for(let i=0; i<80; i++){
+        const sx2 = (i * 137) % GAME_W;
+        const sy2 = (i * 79) % (GAME_H * 0.85);
+        const flicker = 0.5 + 0.5*Math.abs(Math.sin(G.tick*0.04+i*0.8));
+        X.fillStyle = `rgba(255,255,255,${starAlpha * flicker})`;
+        const sz = i%7===0 ? 2 : 1;
+        X.fillRect(sx2, sy2, sz, sz);
+      }
+    }
+
+    // ── Streak lines once fast enough ──
+    const streakAlpha = Math.max(0, prog - 0.55) / 0.45;
+    if(streakAlpha > 0){
+      for(let i=0; i<35; i++){
+        const sx2 = (i*113) % GAME_W;
+        const len = 8 + streakAlpha * 50;
+        const baseY2 = (i*67) % GAME_H;
+        const sy2 = ((baseY2 + scrollY*0.4) % GAME_H + GAME_H) % GAME_H;
+        X.fillStyle = `rgba(200,220,255,${streakAlpha*0.65})`;
+        X.fillRect(sx2, sy2, 1, len);
+      }
+    }
+
+    return;
+  }
+
+  // ── Space phase (fully in space) ──
+  // Deep space background
+  X.fillStyle = '#020408';
+  X.fillRect(0, 0, GAME_W, GAME_H);
+
+  // Parallax star layers
+  for(let layer=0; layer<3; layer++){
+    const speed = [0.1, 0.3, 0.7][layer];
+    const count = [60, 30, 15][layer];
+    const size  = [1,   1,  2][layer];
+    for(let i=0; i<count; i++){
+      const sx2  = (i * (137 + layer*41)) % GAME_W;
+      const baseY = (i * (79 + layer*31)) % GAME_H;
+      const sy2  = ((baseY + scrollY * speed) % GAME_H + GAME_H) % GAME_H;
+      const bright = layer===2 ? (0.5 + 0.5*Math.abs(Math.sin(G.tick*0.03+i*0.7))) : 0.6+0.4*(i%3)/3;
+      X.fillStyle = `rgba(255,255,255,${bright})`;
+      X.fillRect(sx2, sy2, size, size);
+    }
+  }
+
+  // Planets / nebulae
+  const pY = 60 + Math.sin(G.tick * 0.005) * 8;
+  X.fillStyle = 'rgba(40,80,180,0.6)';
+  X.beginPath(); X.arc(360, pY, 45, 0, Math.PI*2); X.fill();
+  X.fillStyle = 'rgba(60,110,220,0.5)';
+  X.beginPath(); X.arc(352, pY - 8, 34, 0, Math.PI*2); X.fill();
+  X.save();
+  X.scale(1, 0.3);
+  X.strokeStyle = 'rgba(100,160,255,0.4)'; X.lineWidth = 3;
+  X.beginPath(); X.arc(360, pY/0.3, 60, 0, Math.PI*2); X.stroke();
+  X.restore();
+  X.globalAlpha = 0.12;
+  X.fillStyle = '#8040c0';
+  X.beginPath(); X.arc(80, 200, 70, 0, Math.PI*2); X.fill();
+  X.fillStyle = '#2060c0';
+  X.beginPath(); X.arc(100, 220, 55, 0, Math.PI*2); X.fill();
+  X.globalAlpha = 1;
+
+  // Spaceship phase: simple dark interior bg before liftoff
+  if(phase === 'spaceship'){
+    X.fillStyle = '#040810';
+    X.fillRect(0, 0, GAME_W, GAME_H);
+  }
+}
+
+function drawSpaceshipWorld(camX, camY){
+  drawSpaceBackground();
+
+  // Draw ship-interior tiles on top
+  const startTX = Math.max(0, Math.floor(camX / TW));
+  const endTX   = Math.min(WIDE - 1, Math.ceil((camX + GAME_W) / TW));
+  const startTY = Math.max(0, Math.floor(camY / TW));
+  const endTY   = Math.min(TALL - 1, Math.ceil((camY + GAME_H) / TW));
+
+  const map = getMap('spaceship');
+  for(let ty2=startTY; ty2<=endTY; ty2++){
+    for(let tx2=startTX; tx2<=endTX; tx2++){
+      const tile = map[ty2][tx2];
+      const sx = tx2*TW - camX;
+      const sy = ty2*TW - camY;
+      drawTileSpaceship(tile, sx, sy, tx2, ty2);
+    }
+  }
+
+  // Draw alien crew members inside ship
+  if(!G.spaceshipCrewDefeated) drawAlienCrew(camX, camY);
+
+  drawSpaceshipProps(camX, camY);
+
+  // Return-to-Earth electric overlay
+  if(G.screen === 'spaceship_return' || (G.spaceshipReturn && G.spaceshipReturn.phase)){
+    drawSpaceshipReturnFX();
+  }
+
+  // Countdown overlay
+  const al = G.alien;
+  if(al && (al.phase === 'spaceship' || al.phase === 'liftoff') && al.countdownActive && al.countdownNum > 0){
+    const alpha = 0.7 + 0.3*Math.abs(Math.sin(G.tick * 0.15));
+    X.globalAlpha = alpha;
+    X.fillStyle = '#00ffaa';
+    X.font = fontReady ? '64px PF' : 'bold 80px monospace';
+    X.textAlign = 'center';
+    X.fillText(String(al.countdownNum), GAME_W/2, GAME_H/2 + 20);
+    X.globalAlpha = 1;
+  }
+  if(al && al.phase === 'liftoff' && (al.liftoffTimer||0) < 30){
+    X.globalAlpha = 0.9;
+    X.fillStyle = '#00ffaa';
+    X.font = fontReady ? '48px PF' : 'bold 64px monospace';
+    X.textAlign = 'center';
+    X.fillText('BLASTOFF!', GAME_W/2, GAME_H/2 + 20);
+    X.globalAlpha = 1;
+  }
+
+  // Liftoff shudder overlay
+  if(al && al.phase === 'liftoff' && (al.liftoffTimer||0) < 60){
+    const shake = (1 - (al.liftoffTimer||0)/60) * 6;
+    X.globalAlpha = 0.15;
+    X.fillStyle = '#ffffff';
+    X.fillRect(0, 0, GAME_W, GAME_H);
+    X.globalAlpha = 1;
+  }
+}
+
+// Alien crew members inside the ship
+const ALIEN_CREW_POSITIONS = [
+  { tx:12, ty:10, label:'NAV' },
+  { tx:14, ty:10, label:'CMD' },
+  { tx:16, ty:10, label:'ENG' },
+];
+
+function drawAlienCrew(camX, camY){
+  ALIEN_CREW_POSITIONS.forEach(crew => {
+    const sx = crew.tx * TW + TW/2 - camX;
+    const sy = crew.ty * TW + TW - camY;
+    if(sx < -32 || sx > GAME_W+32 || sy < -32 || sy > GAME_H+32) return;
+    drawAlienSprite(X, sx, sy - 8, 0.7);
+    // Role label floats above
+    const labelPulse = Math.sin(G.tick*0.06 + crew.tx)*1.5;
+    X.fillStyle = `rgba(100,255,180,${0.6+0.3*Math.sin(G.tick*0.08+crew.tx)})`;
+    X.font = fontReady ? '4px PF' : 'bold 6px monospace';
+    X.textAlign = 'center';
+    X.fillText(crew.label, sx, sy - 44 + labelPulse);
+  });
+}
+
+const SPACESHIP_CHAIR = {tx:8, ty:15};
+const SPACESHIP_FLASK_TABLE = {tx:20, ty:14};
+const SPACESHIP_SUDOKU_CONSOLE = {tx:11, ty:12};
+
+const ALIEN_CREW_TRAINER = {
+  name:'ALIEN CREW',
+  isAlienCrew:true,
+  team:[{id:'radroach',lvl:12},{id:'cyberant',lvl:12},{id:'fruitfly',lvl:13}],
+  intro:'The aliens buzz in unison...\n"Do you wish to fight?"',
+  afterMsg:'Take these Intergalactic\nJumping Beans. They leap\nbetween worlds.',
+  rewardId:null,
+  defeated:false,
+};
+
+function spaceshipFacingTarget(target){
+  const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
+  const[ddx,ddy]=dirs[G.player.dir]||[0,1];
+  const ptx=Math.round(G.player.x/TW), pty=Math.round(G.player.y/TW);
+  return ptx+ddx===target.tx && pty+ddy===target.ty;
+}
+
+function nearAlienCrew(){
+  const ptx=Math.round(G.player.x/TW), pty=Math.round(G.player.y/TW);
+  return ALIEN_CREW_POSITIONS.some(c=>Math.abs(ptx-c.tx)<=1 && Math.abs(pty-c.ty)<=1);
+}
+
+function talkToAlienCrew(crewLabel){
+  const lines = {
+    'NAV': 'NAVIGATOR:\n"Coordinates locked.\nDestination: the fold\nbetween everything."',
+    'CMD': 'COMMANDER:\n"You are the anomaly\nwe have waited\n3,000 orbits to find."',
+    'ENG': 'ENGINEER:\n"Do not touch\nthe blue thing.\nOr the purple thing.\nActually, touch nothing."',
+  };
+  G.pcMsg = lines[crewLabel] || 'STRANGER:\n"..."';
+  G.pcMsgTimer = 260;
+}
+
+function drawSpaceshipProps(camX, camY){
+  drawSpaceshipChair(camX, camY);
+  drawSpaceshipFlaskTable(camX, camY);
+  drawSpaceshipSudokuConsole(camX, camY);
+}
+
+function drawSpaceshipChair(camX, camY){
+  const cx=SPACESHIP_CHAIR.tx*TW-camX, cy=SPACESHIP_CHAIR.ty*TW-camY;
+  if(cx<-48||cx>GAME_W+48||cy<-48||cy>GAME_H+48) return;
+  const pulse=0.5+0.5*Math.abs(Math.sin(G.tick*0.09));
+  // Sleek alien chair
+  X.fillStyle='#2a3048'; X.fillRect(cx-10,cy-6,20,14);
+  X.fillStyle='#3a4868'; X.fillRect(cx-8,cy-18,16,14);
+  X.fillStyle='#4a5880'; X.fillRect(cx-6,cy-16,12,10);
+  // Brainwave analyzer headband
+  X.fillStyle=`rgba(80,220,255,${0.5+pulse*0.4})`;
+  X.fillRect(cx-12,cy-28,24,5);
+  X.fillStyle=`rgba(180,255,255,${pulse})`;
+  X.fillRect(cx-10,cy-27,20,3);
+  for(let i=0;i<3;i++){
+    const bx=cx-8+i*8;
+    X.fillStyle=`rgba(0,255,200,${0.4+0.4*Math.sin(G.tick*0.14+i)})`;
+    X.fillRect(bx,cy-32,3,4);
+  }
+  // Electric arcs when returning
+  if(G.screen==='spaceship_return' && G.spaceshipReturn.phase==='electric'){
+    for(let i=0;i<5;i++){
+      const ex=cx-14+((G.tick*7+i*41)%28);
+      const ey=cy-30+((G.tick*5+i*29)%20);
+      X.strokeStyle=`rgba(120,255,255,${0.5+0.5*Math.random()})`;
+      X.lineWidth=2;
+      X.beginPath(); X.moveTo(ex,ey); X.lineTo(ex+6,ey+10); X.lineTo(ex+2,ey+16); X.stroke();
+    }
+  }
+}
+
+function drawSpaceshipFlaskTable(camX, camY){
+  const cx=SPACESHIP_FLASK_TABLE.tx*TW-camX, cy=SPACESHIP_FLASK_TABLE.ty*TW-camY;
+  if(cx<-48||cx>GAME_W+48||cy<-48||cy>GAME_H+48) return;
+  // Metal lab table
+  X.fillStyle='#4a5060'; X.fillRect(cx-14,cy+2,28,8);
+  X.fillStyle='#6a7088'; X.fillRect(cx-12,cy,24,4);
+  X.fillStyle='#8890a8'; X.fillRect(cx-12,cy,24,2);
+  // Erlenmeyer flask
+  const swirl=Math.sin(G.tick*0.06)*0.3+0.7;
+  X.fillStyle='rgba(60,255,120,0.25)'; X.fillRect(cx-8,cy-18,16,16);
+  X.fillStyle='#a8c8d8'; X.beginPath();
+  X.moveTo(cx-4,cy-20); X.lineTo(cx+4,cy-20); X.lineTo(cx+7,cy-6); X.lineTo(cx-7,cy-6); X.closePath(); X.fill();
+  X.fillStyle=`rgba(40,220,100,${swirl})`;
+  X.fillRect(cx-5,cy-10,10,6);
+  X.fillStyle=`rgba(180,255,200,${swirl*0.6})`;
+  X.fillRect(cx-3,cy-14,6,8);
+  X.fillStyle='#c0d0e0'; X.fillRect(cx-2,cy-22,4,4);
+}
+
+function drawSpaceshipSudokuConsole(camX, camY){
+  const cx=SPACESHIP_SUDOKU_CONSOLE.tx*TW-camX, cy=SPACESHIP_SUDOKU_CONSOLE.ty*TW-camY;
+  if(cx<-48||cx>GAME_W+48||cy<-48||cy>GAME_H+48) return;
+  const pulse=0.4+0.3*Math.sin(G.tick*0.1);
+  X.fillStyle='#1a2038'; X.fillRect(cx-12,cy-10,24,18);
+  X.fillStyle='#283858'; X.fillRect(cx-10,cy-8,20,14);
+  // Alien glyph screen
+  for(let r=0;r<3;r++) for(let c=0;c<3;c++){
+    const col=ALIEN_SUDOKU_COLORS[(r*3+c)%9];
+    X.fillStyle=col;
+    X.fillRect(cx-8+c*5,cy-6+r*4,3,3);
+  }
+  X.strokeStyle=`rgba(120,255,220,${pulse})`;
+  X.lineWidth=2; X.strokeRect(cx-11,cy-9,22,16);
+  // Orb antenna
+  X.fillStyle=`rgba(100,255,200,${pulse})`;
+  X.beginPath(); X.arc(cx,cy-14,4,0,Math.PI*2); X.fill();
+}
+
+function healSpaceshipFlask(){
+  const healAll=inst=>{
+    inst.maxHp=levelStats(inst.id,inst.level).hp;
+    inst.hp=inst.maxHp;
+  };
+  G.loadout.forEach(healAll);
+  (G.storage||[]).forEach(healAll);
+  G.battleParty=buildBattleParty();
+  G.pcMsg='A strange liquid...\nsomething compels you\nto toss your bugs in!\n\nAll bugs fully restored!';
+  G.pcMsgTimer=260;
+  sfx('heal');
+}
+
+function startSpaceshipReturn(){
+  G.screen='spaceship_return';
+  G.spaceshipReturn={timer:0, phase:'electric'};
+  G.keys={};
+  sfx('encounter');
+}
+
+function updateSpaceshipReturn(){
+  const sr=G.spaceshipReturn;
+  if(!sr) return;
+  sr.timer++;
+  if(sr.phase==='electric' && sr.timer>90){
+    sr.phase='blackout';
+    sr.timer=0;
+  }
+  if(sr.phase==='blackout' && sr.timer>70){
+    finishSpaceshipReturn();
+  }
+}
+
+function drawSpaceshipReturnFX(){
+  const sr=G.spaceshipReturn||{phase:'electric',timer:0};
+  if(sr.phase==='electric'){
+    const shake=(Math.random()-0.5)*8;
+    X.save();
+    X.translate(shake,shake*0.5);
+    X.globalAlpha=0.35+0.25*Math.random();
+    X.fillStyle='#80ffff';
+    for(let i=0;i<12;i++){
+      X.fillRect((i*47+G.tick*9)%GAME_W,(i*31+G.tick*7)%GAME_H,2,14);
+    }
+    X.restore();
+  } else if(sr.phase==='blackout'){
+    const fade=Math.min(1,sr.timer/50);
+    X.fillStyle=`rgba(0,0,0,${fade})`;
+    X.fillRect(0,0,GAME_W,GAME_H);
+  }
+}
+
+function finishSpaceshipReturn(){
+  const al=G.alien;
+  if(al){ al.active=false; al.phase='done'; al.overlayAlpha=0; }
+  G.zone=G.alienReturnZone!==undefined?G.alienReturnZone:(G.prevZone||1);
+  G.player.x=G.alienReturnX!==undefined?G.alienReturnX:G.player.x;
+  G.player.y=G.alienReturnY!==undefined?G.alienReturnY:G.player.y;
+  G.player.visX=G.player.x; G.player.visY=G.player.y;
+  G.player.dir=2;
+  G.moveDelay=20;
+  G.screen='world';
+  G.spaceshipReturn=null;
+  G.pcMsg='You wake on solid ground.\nThe ship is gone.\nThe sky looks normal again.';
+  G.pcMsgTimer=280;
+  showZoneName(G.zone);
+  sfx('portal');
+  autoSave();
+}
+
+function drawSpaceshipReturnPrompt(){
+  X.fillStyle='#040810'; X.fillRect(0,0,480,432);
+  panel(48,86,384,236,'#e8f0ff');
+  T('BRAINWAVE ANALYZER',240,118,9,'#2040a0','center');
+  T('Wish to return to Earth?',240,162,8,'#304060','center');
+  BTN(94,224,138,42,'YES',()=>{ sfx('menu'); startSpaceshipReturn(); });
+  BTN(248,224,138,42,'NO',()=>{ sfx('menu'); G.screen='world'; });
+}
+
+function drawSpaceshipFightPrompt(){
+  X.fillStyle='#040810'; X.fillRect(0,0,480,432);
+  panel(48,86,384,236,'#e8fff4');
+  T('ALIEN CREW',240,118,9,'#108060','center');
+  T('Do you wish to fight?',240,162,8,'#304060','center');
+  T('(They battle as a trio)',240,186,6,'#607080','center');
+  BTN(94,224,138,42,'YES',()=>{ sfx('encounter'); G.screen='world'; triggerAlienCrewBattle(); });
+  BTN(248,224,138,42,'NO',()=>{ sfx('menu'); G.screen='world'; });
+}
+
+function triggerAlienCrewBattle(){
+  if(G.spaceshipCrewDefeated) return;
+  const npc=ALIEN_CREW_TRAINER;
+  const lead=npc.team[0];
+  G.battle={
+    wild:makeBug(lead.id,{isWild:true,level:lead.lvl}),
+    trainer:{name:npc.name, team:npc.team, idx:0, npc:npc, rewardId:null}
+  };
+  if(!hasBattleReadyBug()){G.battle=null;startWhiteout();return;}
+  G.battleParty=buildBattleParty();
+  if(!G.battleParty.length){G.battle=null;return;}
+  G.battleMsg=`${npc.name}:\n${npc.intro}`;
+  G.battlePhase='trainer-show';
+  G.trainerAnimT=0;
+  G.btFlashP=0; G.btFlashE=0; G.btTick=0; G.swapMode=false;
+  startBattleTransition();
+  sfx('encounter');
+}
+
+function awardAlienCrewBeans(){
+  G.spaceshipCrewDefeated=true;
+  G.inventory.jumpBeans=(G.inventory.jumpBeans||0)+1;
+  G.inventory.jumpBeansSteps=G.inventory.jumpBeansSteps||0;
+  G.pendingItemReward={
+    name:'INTERGALACTIC JUMPING BEANS',
+    desc:'Strange beans that twitch\nwith cosmic energy.\nWalk 1679 steps to hatch\ninto an INTERGALACTIC\nBEAN MOTH.',
+    sprite:'jumpbeans',
+  };
+  G.pendingReward=null;
+}
+
+// ─── ALIEN SUDOKU ───
+const ALIEN_SUDOKU_COLORS=['#ff4466','#44ff88','#4488ff','#ffcc44','#ff44ff','#44ffff','#ff8844','#aa44ff','#88ff44'];
+const ALIEN_SUDOKU_PUZZLE=[
+  [5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],
+  [8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],
+  [0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,9],
+];
+const ALIEN_SUDOKU_SOLUTION=[
+  [5,3,4,6,7,8,9,1,2],[6,7,2,1,9,5,3,4,8],[1,9,8,3,4,2,5,6,7],
+  [8,5,9,7,6,1,4,2,3],[4,2,6,8,5,3,7,9,1],[7,1,3,9,2,4,8,5,6],
+  [9,6,1,5,3,7,2,8,4],[2,8,7,4,1,9,6,3,5],[3,4,5,2,8,6,1,7,9],
+];
+
+function initSudokuState(){
+  const puzzle=ALIEN_SUDOKU_PUZZLE.map(row=>row.slice());
+  const fixed=puzzle.map(row=>row.map(v=>v!==0));
+  G.sudoku={
+    puzzle, solution:ALIEN_SUDOKU_SOLUTION,
+    grid:puzzle.map(row=>row.slice()),
+    fixed, cursor:{r:0,c:0}, solved:!!(G.sudoku&&G.sudoku.solved),
+  };
+}
+
+function openAlienSudoku(){
+  if(!G.sudoku) initSudokuState();
+  else {
+    G.sudoku.puzzle=ALIEN_SUDOKU_PUZZLE.map(r=>r.slice());
+    G.sudoku.solution=ALIEN_SUDOKU_SOLUTION;
+    if(!G.sudoku.grid) G.sudoku.grid=G.sudoku.puzzle.map(r=>r.slice());
+    if(!G.sudoku.fixed) G.sudoku.fixed=G.sudoku.puzzle.map(row=>row.map(v=>v!==0));
+    if(!G.sudoku.cursor) G.sudoku.cursor={r:0,c:0};
+  }
+  G.screen='alien_sudoku';
+  sfx('menu');
+}
+
+function sudokuSetCell(val){
+  const s=G.sudoku; if(!s||s.solved) return;
+  const {r,c}=s.cursor;
+  if(s.fixed[r][c]) return;
+  s.grid[r][c]=val;
+  checkSudokuSolved();
+}
+
+function checkSudokuSolved(){
+  const s=G.sudoku; if(!s) return;
+  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
+    if(s.grid[r][c]===0) return;
+    if(s.grid[r][c]!==s.solution[r][c]) return;
+  }
+  s.solved=true;
+  sfx('win');
+}
+
+function drawAlienSudokuSymbol(ctx,x,y,num,size){
+  const col=ALIEN_SUDOKU_COLORS[num-1]||'#fff';
+  ctx.fillStyle=col;
+  ctx.strokeStyle=col;
+  const s=size;
+  if(num===1){ ctx.beginPath(); ctx.arc(x,y,s*0.35,0,Math.PI*2); ctx.fill(); }
+  else if(num===2){ ctx.beginPath(); ctx.moveTo(x,y-s*0.4); ctx.lineTo(x-s*0.35,y+s*0.35); ctx.lineTo(x+s*0.35,y+s*0.35); ctx.closePath(); ctx.fill(); }
+  else if(num===3){ ctx.fillRect(x-s*0.35,y-s*0.35,s*0.7,s*0.7); }
+  else if(num===4){ ctx.save(); ctx.translate(x,y); ctx.rotate(Math.PI/4); ctx.fillRect(-s*0.28,-s*0.28,s*0.56,s*0.56); ctx.restore(); }
+  else if(num===5){ for(let i=0;i<5;i++){ const a=i*1.26; ctx.fillRect(x+Math.cos(a)*s*0.3-1,y+Math.sin(a)*s*0.3-1,2,2); } }
+  else if(num===6){ ctx.beginPath(); ctx.moveTo(x-s*0.35,y); ctx.lineTo(x,y-s*0.35); ctx.lineTo(x+s*0.35,y); ctx.lineTo(x,y+s*0.35); ctx.closePath(); ctx.fill(); }
+  else if(num===7){ ctx.fillRect(x-s*0.3,y-s*0.15,s*0.6,s*0.3); ctx.fillRect(x-2,y-s*0.35,4,s*0.7); }
+  else if(num===8){ ctx.beginPath(); ctx.arc(x,y-s*0.15,s*0.22,Math.PI,0); ctx.fill(); ctx.fillRect(x-s*0.3,y,s*0.6,s*0.25); }
+  else { ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,s*0.32,0,Math.PI*2); ctx.stroke(); }
+}
+
+function drawAlienSudoku(){
+  const s=G.sudoku;
+  if(!s){ G.screen='world'; return; }
+  X.fillStyle='#060818'; X.fillRect(0,0,480,432);
+  panel(0,0,480,32,'#c8e8ff');
+  T('ALIEN SUDOKU',240,22,9,'#102040','center');
+  const ox=72, oy=44, cs=36;
+  // Board background
+  X.fillStyle='#1a2848'; X.fillRect(ox-4,oy-4,cs*9+8,cs*9+8);
+  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
+    const cx=ox+c*cs, cy=oy+r*cs;
+    const sel=s.cursor.r===r&&s.cursor.c===c;
+    X.fillStyle=sel?'#2a4878':((Math.floor(r/3)+Math.floor(c/3))%2?'#243858':'#1e3048');
+    X.fillRect(cx,cy,cs-1,cs-1);
+    const v=s.grid[r][c];
+    if(v>0){
+      X.globalAlpha=s.fixed[r][c]?1:0.92;
+      drawAlienSudokuSymbol(X,cx+cs/2,cy+cs/2,v,10);
+      X.globalAlpha=1;
+    }
+  }
+  // Bold 3x3 lines
+  X.strokeStyle='#80c0ff'; X.lineWidth=3;
+  for(let i=0;i<=9;i+=3){
+    X.beginPath(); X.moveTo(ox+i*cs,oy); X.lineTo(ox+i*cs,oy+cs*9); X.stroke();
+    X.beginPath(); X.moveTo(ox,oy+i*cs); X.lineTo(ox+cs*9,oy+i*cs); X.stroke();
+  }
+  X.strokeStyle='#4060a0'; X.lineWidth=1;
+  for(let i=0;i<=9;i++){
+    X.beginPath(); X.moveTo(ox+i*cs,oy); X.lineTo(ox+i*cs,oy+cs*9); X.stroke();
+    X.beginPath(); X.moveTo(ox,oy+i*cs); X.lineTo(ox+cs*9,oy+i*cs); X.stroke();
+  }
+  // Symbol key
+  T('Symbols 1-9 — tap cell, then symbol',240,388,5,'#8090b0','center');
+  if(s.solved) T('SOLVED! (More to come...)',240,404,6,'#40ff90','center');
+  // Pick row — number palette
+  const py=400;
+  for(let n=1;n<=9;n++){
+    const px=48+(n-1)*44;
+    BTN(px-14,py-22,32,32,String(n),()=>sudokuSetCell(n),false);
+    drawAlienSudokuSymbol(X,px,py,n,6);
+  }
+  BTN(px+44,py-22,40,32,'CLR',()=>sudokuSetCell(0),false);
+  BTN(12,400,56,26,'EXIT',()=>{ sfx('menu'); G.screen='world'; });
+  // Cell click targets
+  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
+    const cx=ox+c*cs, cy=oy+r*cs;
+    G.buttons.push({x:cx,y:cy,w:cs-1,h:cs-1,label:'sud_cell',action:()=>{ s.cursor={r,c}; }});
+  }
+}
+
+function interactSpaceshipTile(tx, ty){
+  if(G.spaceshipCrewDefeated===false && nearAlienCrew()){
+    G.screen='spaceship_fight_prompt';
+    sfx('menu');
+    return;
+  }
+  if(spaceshipFacingTarget(SPACESHIP_CHAIR)){
+    G.screen='spaceship_return_prompt';
+    sfx('menu');
+    return;
+  }
+  if(spaceshipFacingTarget(SPACESHIP_FLASK_TABLE)){
+    G.pcMsg='A strange liquid...\nsomething compels you\nto throw your bugs in?';
+    G.pcMsgTimer=200;
+    healSpaceshipFlask();
+    return;
+  }
+  if(spaceshipFacingTarget(SPACESHIP_SUDOKU_CONSOLE)){
+    openAlienSudoku();
+    return;
+  }
+
+  const tile = gt('spaceship', tx, ty);
+  if(tile === 42){
+    G.pcMsg = 'CONTROL PANEL:\nThe symbols shift as\nyou approach.\nYou understand nothing.\nAnd everything.';
+    G.pcMsgTimer = 240;
+  } else if(tile === 45){
+    G.pcMsg = 'You press your face\nagainst the porthole.\nEarth is a blue speck.\nYour whole life fits\ninside a thumbprint.';
+    G.pcMsgTimer = 280;
+  } else if(tile === 43){
+    G.pcMsg = 'ENGINE CORE:\nA deep hum resonates\nin your back teeth.\nThe colour has no name.';
+    G.pcMsgTimer = 220;
+  }
 }
 
 // ── Hive shrine interaction ──
@@ -4014,6 +5248,67 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
   if(key==='lakeRake'){drawRakeSprite(ctx,cx,cy,s);ctx.restore();return;}
   if(key==='cocoon'){spCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
   if(key==='silkCocoon'){spSilkCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
+  if(key==='jumpBeans'){drawJumpBeansSprite(ctx,cx,cy,s);ctx.restore();return;}
+  if(key==='honey'){
+    // Honey jar — squat hexagonal jar, golden fill
+    // Jar body
+    ctx.fillStyle='#c87800';ctx.fillRect(cx-9*s,cy-14*s,18*s,22*s);
+    ctx.fillStyle='#f0a820';ctx.fillRect(cx-8*s,cy-13*s,16*s,20*s);
+    // Honey fill (darker amber at bottom)
+    ctx.fillStyle='#e08010';ctx.fillRect(cx-7*s,cy-2*s,14*s,9*s);
+    // Light reflection inside jar
+    ctx.fillStyle='rgba(255,220,80,0.55)';ctx.fillRect(cx-5*s,cy-11*s,5*s,10*s);
+    ctx.fillStyle='rgba(255,240,120,0.35)';ctx.fillRect(cx-5*s,cy-11*s,2*s,7*s);
+    // Jar lip / rim
+    ctx.fillStyle='#a05800';ctx.fillRect(cx-10*s,cy-16*s,20*s,4*s);
+    ctx.fillStyle='#c87800';ctx.fillRect(cx-9*s,cy-17*s,18*s,2*s);
+    // Lid
+    ctx.fillStyle='#d0b040';ctx.fillRect(cx-8*s,cy-19*s,16*s,4*s);
+    ctx.fillStyle='#e8c850';ctx.fillRect(cx-7*s,cy-18*s,14*s,2*s);
+    // Honeycomb dots on jar
+    ctx.fillStyle='rgba(180,90,0,0.4)';
+    ctx.fillRect(cx-4*s,cy-9*s,3*s,3*s);ctx.fillRect(cx+2*s,cy-9*s,3*s,3*s);
+    ctx.fillRect(cx-1*s,cy-5*s,3*s,3*s);
+    // Drip down the side
+    ctx.fillStyle='#e08010';ctx.fillRect(cx+6*s,cy-12*s,2*s,8*s);
+    ctx.fillRect(cx+6*s,cy-5*s,3*s,3*s);
+    ctx.restore();return;
+  }
+  if(key==='madHoney'){
+    // Same jar shape as honey but deep purple/violet with eerie swirl and glow
+    const pulse = 0.7 + 0.3*Math.abs(Math.sin(G.tick*0.08));
+    // Outer glow
+    ctx.globalAlpha = 0.35 * pulse;
+    ctx.fillStyle='#c040ff';
+    ctx.beginPath();ctx.arc(cx,cy-4*s,18*s,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=1;
+    // Jar body
+    ctx.fillStyle='#3a0860';ctx.fillRect(cx-9*s,cy-14*s,18*s,22*s);
+    ctx.fillStyle='#5a1090';ctx.fillRect(cx-8*s,cy-13*s,16*s,20*s);
+    // Purple honey fill
+    ctx.fillStyle='#7020a0';ctx.fillRect(cx-7*s,cy-2*s,14*s,9*s);
+    // Swirl — two arcing stripes of lighter purple
+    ctx.fillStyle='rgba(200,80,255,0.45)';
+    ctx.fillRect(cx-6*s,cy-11*s,3*s,14*s);
+    ctx.fillRect(cx+1*s,cy-8*s,3*s,10*s);
+    // Inner shimmer
+    ctx.fillStyle='rgba(220,140,255,0.3)';ctx.fillRect(cx-5*s,cy-11*s,2*s,7*s);
+    // Jar lip / rim
+    ctx.fillStyle='#250440';ctx.fillRect(cx-10*s,cy-16*s,20*s,4*s);
+    ctx.fillStyle='#3a0860';ctx.fillRect(cx-9*s,cy-17*s,18*s,2*s);
+    // Lid — glowing violet
+    ctx.fillStyle=`rgba(140,40,220,${pulse})`;ctx.fillRect(cx-8*s,cy-19*s,16*s,4*s);
+    ctx.fillStyle='rgba(200,100,255,0.7)';ctx.fillRect(cx-7*s,cy-18*s,14*s,2*s);
+    // Tiny stars/sparkles floating above
+    ctx.fillStyle=`rgba(220,160,255,${pulse})`;
+    ctx.fillRect(cx-2*s,cy-24*s,2*s,2*s);
+    ctx.fillRect(cx+5*s,cy-22*s,2*s,2*s);
+    ctx.fillRect(cx-7*s,cy-21*s,2*s,2*s);
+    ctx.fillStyle='rgba(255,220,255,0.9)';
+    ctx.fillRect(cx-1*s,cy-25*s,1*s,1*s);
+    ctx.fillRect(cx+6*s,cy-23*s,1*s,1*s);
+    ctx.restore();return;
+  }
   if(key==='wildFruit'){
     ctx.fillStyle='#1f7a28';ctx.fillRect(cx-2*s,cy-18*s,4*s,7*s);
     ctx.fillStyle='#55b83a';ctx.fillRect(cx+2*s,cy-18*s,9*s,5*s);
@@ -4039,6 +5334,41 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
   }
   ctx.restore();
 }
+// ── Thin bottom-pinned dialog box ──
+// Fixed at bottom of screen: y=358, height=74, full width.
+// Fits up to 4 lines of text comfortably.
+function drawPcMsg(){
+  const BOX_Y = 358, BOX_H = 74, BOX_X = 0, BOX_W = 480;
+  const INNER_X = 14, TEXT_X = 14, TEXT_Y0 = BOX_Y + 18, LINE_H = 16;
+
+  // Shadow strip
+  X.fillStyle = 'rgba(0,0,0,0.45)';
+  X.fillRect(BOX_X, BOX_Y - 2, BOX_W, BOX_H + 2);
+  // Box body
+  X.fillStyle = '#f0ece0';
+  X.fillRect(BOX_X, BOX_Y, BOX_W, BOX_H);
+  // Top accent line
+  X.fillStyle = '#303848';
+  X.fillRect(BOX_X, BOX_Y, BOX_W, 3);
+  // Inner bevel
+  X.fillStyle = 'rgba(255,255,255,0.55)';
+  X.fillRect(BOX_X, BOX_Y + 3, BOX_W, 2);
+
+  const lines = G.pcMsg.split('\n').slice(0, 4);
+  lines.forEach((l, i) => T(l, TEXT_X + 4, TEXT_Y0 + i * LINE_H, 6, '#303848'));
+
+  // Blinking dismiss chevron
+  if(Math.floor(G.tick/18)%2===0){
+    X.fillStyle = '#909898';
+    X.font = fontReady ? '7px PF' : 'bold 9px monospace';
+    X.textAlign = 'right';
+    X.fillText('▼', BOX_W - 10, BOX_Y + BOX_H - 8);
+    X.textAlign = 'left';
+  }
+
+  G.buttons.push({x:BOX_X, y:BOX_Y, w:BOX_W, h:BOX_H, label:'pcmsg_dismiss', action:()=>{G.pcMsgTimer=0;}});
+}
+
 function drawBag(){
   X.fillStyle='#1a1230'; X.fillRect(0,0,480,432);
   panel(0,0,480,32,'#f8f8e8');
@@ -4046,31 +5376,44 @@ function drawBag(){
 
   const inv = G.inventory;
   const items = [
-    {key:'honey',     label:'Honey',          qty:inv.honey||0,          desc:'Golden honey from a bee nest.\nHold onto it for now.',     hasIt:(inv.honey||0)>0},
-    {key:'madHoney',  label:'Mad Honey',      qty:inv.madHoney||0,       desc:'Strange honey with an odd scent.\nSomething feels different about it.',hasIt:(inv.madHoney||0)>0},
-    {key:'lakeRake',      label:'Lake Weed Rake',   qty: inv.lakeRake ? 1 : 0,     desc:'Press Z (or tap Z on mobile)\nwhile standing in water to rake.',       hasIt: !!inv.lakeRake},
-    {key:'specialMushroom',label:'Mystery Truffle',  qty: inv.specialMushroom||0,   desc:'A truffle sniffed out by the pig.\nSmells... interesting.', hasIt: (inv.specialMushroom||0)>0},
-    {key:'wildFruit',      label:'Wild Fruit',        qty: inv.wildFruit||0,         desc:'Fruit shaken loose from Mossy\nWoods trees.',             hasIt: (inv.wildFruit||0)>0},
-    {key:'cocoon',         label:'Cocoon',            qty: inv.cocoon||0,            desc:`Walk 1000 steps to hatch into a MONARCH.\nSteps: ${inv.cocoonSteps||0} / 1000`, hasIt: (inv.cocoon||0)>0},
-    {key:'silkCocoon',     label:'Silk Cocoon',       qty: inv.silkCocoon||0,        desc:`Walk 1000 steps to hatch into a SILK MOTH.\nSteps: ${inv.silkCocoonSteps||0} / 1000`, hasIt: (inv.silkCocoon||0)>0},
-    {key:'lakeWeed',      label:'Lake Weed',         qty: inv.lakeWeed||0,          desc:'Clumps of pond weed. Maybe useful.',         hasIt: (inv.lakeWeed||0)>0},
-    {key:'shinyRock',     label:'Shiny Rock',        qty: inv.shinyRock||0,         desc:'A smooth glittery rock.',                    hasIt: (inv.shinyRock||0)>0},
-    {key:'scrapMetal',    label:'Scrap Metal',       qty: inv.scrapMetal||0,        desc:'Rusted metal bits from the pond.',           hasIt: (inv.scrapMetal||0)>0},
+    {key:'honey',          label:'Honey',            qty:inv.honey||0,          desc:'Golden honey from a bee nest.\nHold onto it for now.',                          hasIt:(inv.honey||0)>0},
+    {key:'madHoney',       label:'Mad Honey',         qty:inv.madHoney||0,       desc:'Strange honey with an odd scent.\nSomething feels different about it.',          hasIt:(inv.madHoney||0)>0},
+    {key:'lakeRake',       label:'Lake Weed Rake',    qty:inv.lakeRake?1:0,      desc:'Press Z (or tap Z on mobile)\nwhile standing in water to rake.',                hasIt:!!inv.lakeRake},
+    {key:'specialMushroom',label:'Mystery Truffle',   qty:inv.specialMushroom||0,desc:'A truffle sniffed out by the pig.\nSmells... interesting.',                      hasIt:(inv.specialMushroom||0)>0},
+    {key:'wildFruit',      label:'Wild Fruit',        qty:inv.wildFruit||0,      desc:'Fruit shaken loose from Mossy\nWoods trees.',                                   hasIt:(inv.wildFruit||0)>0},
+    {key:'cocoon',         label:'Cocoon',            qty:inv.cocoon||0,         desc:`Walk 1000 steps to hatch\ninto a MONARCH.\nSteps: ${inv.cocoonSteps||0}/1000`,   hasIt:(inv.cocoon||0)>0},
+    {key:'silkCocoon',     label:'Silk Cocoon',       qty:inv.silkCocoon||0,     desc:`Walk 1000 steps to hatch\ninto a SILK MOTH.\nSteps: ${inv.silkCocoonSteps||0}/1000`,hasIt:(inv.silkCocoon||0)>0},
+    {key:'jumpBeans',      label:'Intergalactic\nJumping Beans', qty:inv.jumpBeans||0, desc:`Walk 1679 steps to hatch\ninto INTERGALACTIC\nBEAN MOTH.\nSteps: ${inv.jumpBeansSteps||0}/1679`, hasIt:(inv.jumpBeans||0)>0},
+    {key:'lakeWeed',       label:'Lake Weed',         qty:inv.lakeWeed||0,       desc:'Clumps of pond weed. Maybe useful.',                                            hasIt:(inv.lakeWeed||0)>0},
+    {key:'shinyRock',      label:'Shiny Rock',        qty:inv.shinyRock||0,      desc:'A smooth glittery rock.',                                                       hasIt:(inv.shinyRock||0)>0},
+    {key:'scrapMetal',     label:'Scrap Metal',       qty:inv.scrapMetal||0,     desc:'Rusted metal bits from the pond.',                                              hasIt:(inv.scrapMetal||0)>0},
   ].filter(it => it.hasIt);
+
+  const ITEM_H = 60, HEADER_H = 32, FOOTER_H = 28;
+  const visY = HEADER_H, visH = 432 - HEADER_H - FOOTER_H;
+  const totalH = items.length * ITEM_H;
+  const maxScroll = Math.max(0, totalH - visH);
+  G.bagScroll = Math.max(0, Math.min(G.bagScroll, maxScroll));
 
   if(items.length === 0){
     panel(40, 160, 400, 80, '#f0ece0');
     T('Your bag is empty.', 240, 196, 7, '#707080', 'center');
     T('Find items by exploring!', 240, 214, 5, '#909098', 'center');
   } else {
+    // Clipping region
+    X.save();
+    X.beginPath(); X.rect(0, visY, 480, visH); X.clip();
+
     items.forEach((it, i) => {
-      const iy = 42 + i * 60;
-      X.fillStyle = '#e8e4d8'; X.fillRect(8, iy, 464, 56);
-      X.strokeStyle = '#607040'; X.lineWidth=2; X.strokeRect(8, iy, 464, 56);
+      const iy = visY + i * ITEM_H - G.bagScroll;
+      if(iy + ITEM_H < visY || iy > visY + visH) return;
+
+      X.fillStyle = '#e8e4d8'; X.fillRect(8, iy, 464, ITEM_H - 4);
+      X.strokeStyle = '#607040'; X.lineWidth = 2; X.strokeRect(8, iy, 464, ITEM_H - 4);
 
       // Icon area
       X.fillStyle = '#c4d8c0'; X.fillRect(12, iy+4, 48, 48);
-      drawItemSprite(X,it.key,36,iy+34,it.key==='lakeRake'?0.58:0.64);
+      drawItemSprite(X, it.key, 36, iy+34, it.key==='lakeRake'?0.58:0.64);
 
       // Text
       T(it.label, 70, iy+18, 7, '#303848');
@@ -4078,16 +5421,44 @@ function drawBag(){
       if(qtyStr) T(qtyStr, 464, iy+18, 7, '#303848', 'right');
       it.desc.split('\n').forEach((l,li)=>T(l, 70, iy+33+li*12, 5, '#607080'));
 
-      // USE button for mushroom
-      if(it.key==='specialMushroom' && it.qty > 0){
-        BTN(360, iy+30, 100, 22, 'EAT →', ()=>{
-          eatMysteryTruffle();
-        });
-      }
+      if(it.key==='specialMushroom' && it.qty>0)
+        BTN(360, iy+30, 100, 22, 'EAT →', ()=>{ eatMysteryTruffle(); });
+      if(it.key==='madHoney' && it.qty>0)
+        BTN(360, iy+30, 100, 22, 'EAT →', ()=>{ sfx('menu'); G.screen='world'; eatMadHoney(); });
     });
+
+    X.restore();
+
+    // Scrollbar track
+    if(totalH > visH){
+      const trackH = visH - 4;
+      const thumbH = Math.max(20, trackH * visH / totalH);
+      const thumbY = visY + 2 + (trackH - thumbH) * G.bagScroll / maxScroll;
+      X.fillStyle = 'rgba(0,0,0,0.18)'; X.fillRect(474, visY, 6, visH);
+      X.fillStyle = '#607040'; X.fillRect(475, thumbY, 4, thumbH);
+    }
+
+    // Scroll hint arrows if there's overflow
+    if(G.bagScroll > 0){
+      X.fillStyle='rgba(96,112,64,0.8)';
+      X.font = fontReady?'8px PF':'bold 10px monospace'; X.textAlign='center';
+      X.fillText('▲', 240, visY + 10);
+    }
+    if(G.bagScroll < maxScroll){
+      X.fillStyle='rgba(96,112,64,0.8)';
+      X.font = fontReady?'8px PF':'bold 10px monospace'; X.textAlign='center';
+      X.fillText('▼', 240, visY + visH - 4);
+    }
+    X.textAlign='left';
   }
 
-  BTN(4,416,120,14,'← BACK',()=>{sfx('menu');G.screen=G.prevScreen||'menu';});
+  // Footer
+  X.fillStyle='#1a1230'; X.fillRect(0, 432-FOOTER_H, 480, FOOTER_H);
+  BTN(4, 432-FOOTER_H+2, 100, FOOTER_H-4, '← BACK', ()=>{ sfx('menu'); G.screen=G.prevScreen||'menu'; });
+  if(items.length > 0 && maxScroll > 0){
+    BTN(342, 432-FOOTER_H+2, 64, FOOTER_H-4, '▲', ()=>{ G.bagScroll=Math.max(0,G.bagScroll-ITEM_H); });
+    BTN(410, 432-FOOTER_H+2, 66, FOOTER_H-4, '▼', ()=>{ G.bagScroll=Math.min(maxScroll,G.bagScroll+ITEM_H); });
+  }
 }
 function drawBugdex(){
   X.fillStyle='#101820';X.fillRect(0,0,480,432);
@@ -4357,6 +5728,10 @@ function loop(){
     case 'gear':    drawGear();   break;
     case 'bag':     drawBag();    break;
     case 'hatch':   drawHatch();  break;
+    case 'spaceship_return': drawWorld(); break;
+    case 'spaceship_return_prompt': drawSpaceshipReturnPrompt(); break;
+    case 'spaceship_fight_prompt': drawSpaceshipFightPrompt(); break;
+    case 'alien_sudoku': drawAlienSudoku(); break;
     case 'editor':       drawEditor();      break;
     case 'editor_warp':  drawEditorWarp();  break;
   }
@@ -4405,6 +5780,18 @@ document.addEventListener('keydown',e=>{
     }
   }
   if((e.key==='z'||e.key==='Z')&&G.screen==='world') doZAction();
+  if(G.screen==='alien_sudoku'){
+    const s=G.sudoku;
+    if(s){
+      if(e.key==='ArrowUp'||e.key==='w'){s.cursor.r=Math.max(0,s.cursor.r-1);e.preventDefault();}
+      if(e.key==='ArrowDown'||e.key==='s'){s.cursor.r=Math.min(8,s.cursor.r+1);e.preventDefault();}
+      if(e.key==='ArrowLeft'||e.key==='a'){s.cursor.c=Math.max(0,s.cursor.c-1);e.preventDefault();}
+      if(e.key==='ArrowRight'||e.key==='d'){s.cursor.c=Math.min(8,s.cursor.c+1);e.preventDefault();}
+      if(e.key>='1'&&e.key<='9') sudokuSetCell(parseInt(e.key,10));
+      if(e.key==='0'||e.key==='Backspace'||e.key==='Delete') sudokuSetCell(0);
+      if(e.key==='Escape'||e.key==='b'||e.key==='B'){G.screen='world';sfx('menu');}
+    }
+  }
   if(G.screen==='naming'){
     if(e.key==='Backspace')G.nameStr=G.nameStr.slice(0,-1);
     else if(e.key==='Enter')confirmName();
@@ -4450,6 +5837,10 @@ C.addEventListener('click',e=>{
 C.addEventListener('touchstart',e=>{
   e.preventDefault();
   const{x,y}=canvasPos(e);
+  // Track touch start for drag-scroll on bag/bugdex/loadout screens
+  G._touchStartY = y;
+  G._touchLastY  = y;
+  G._touchScrollScreen = G.screen;
   const sl=(G.sliders||[]).find(s=>x>=s.x&&x<=s.x+s.w&&y>=s.y&&y<=s.y+s.h);
   if(sl){
     G.activeSlider=sl;
@@ -4460,12 +5851,41 @@ C.addEventListener('touchstart',e=>{
   if(h&&h.action)h.action();
 },{passive:false});
 C.addEventListener('touchmove',e=>{
-  if(!G.activeSlider)return;
   e.preventDefault();
-  const{x}=canvasPos(e);
-  G.activeSlider.action(Math.max(0,Math.min(1,(x-G.activeSlider.x)/G.activeSlider.w)));
+  const{x,y}=canvasPos(e);
+  if(G.activeSlider){
+    G.activeSlider.action(Math.max(0,Math.min(1,(x-G.activeSlider.x)/G.activeSlider.w)));
+    return;
+  }
+  // Drag-scroll bag
+  if(G._touchScrollScreen === 'bag' && G.screen === 'bag'){
+    const dy = (G._touchLastY||y) - y;
+    G.bagScroll = Math.max(0, (G.bagScroll||0) + dy);
+    G._touchLastY = y;
+    return;
+  }
+  // Drag-scroll bugdex
+  if(G._touchScrollScreen === 'bugdex' && G.screen === 'bugdex'){
+    const dy = (G._touchLastY||y) - y;
+    G.bugdexScroll = Math.max(0, (G.bugdexScroll||0) + dy);
+    G._touchLastY = y;
+  }
 },{passive:false});
-C.addEventListener('touchend',()=>{G.activeSlider=null;},{passive:true});
+C.addEventListener('touchend',()=>{
+  G.activeSlider=null;
+  G._touchStartY=null; G._touchLastY=null; G._touchScrollScreen=null;
+},{passive:true});
+
+// Mouse wheel scroll for bag / bugdex
+C.addEventListener('wheel', e=>{
+  if(G.screen==='bag'){
+    G.bagScroll = Math.max(0, (G.bagScroll||0) + (e.deltaY > 0 ? 60 : -60));
+    e.preventDefault();
+  } else if(G.screen==='bugdex'){
+    G.bugdexScroll = Math.max(0, (G.bugdexScroll||0) + (e.deltaY > 0 ? 66 : -66));
+    e.preventDefault();
+  }
+},{passive:false});
 
 // ═══════════════════════════════════════════════
 // ON-SCREEN CONTROLLER
@@ -4482,8 +5902,8 @@ function dpRelease(key,el){
 
 function setupDpad(id,key){
   const el=document.getElementById(id);
-  el.addEventListener('touchstart',e=>{e.preventDefault();dpPress(key,el);},{passive:false});
-  el.addEventListener('touchend',  e=>{e.preventDefault();dpRelease(key,el);},{passive:false});
+  el.addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();dpPress(key,el);},{passive:false});
+  el.addEventListener('touchend',  e=>{e.preventDefault();e.stopPropagation();dpRelease(key,el);},{passive:false});
   el.addEventListener('touchcancel',e=>{dpRelease(key,el);});
   // Mouse fallback
   el.addEventListener('mousedown',()=>dpPress(key,el));
@@ -4498,8 +5918,8 @@ setupDpad('dp-right','ArrowRight');
 // A button = Enter/Z (confirm / interact)
 function setupBtn(id,fn){
   const el=document.getElementById(id);
-  el.addEventListener('touchstart',e=>{e.preventDefault();el.classList.add('pressed');fn();},{passive:false});
-  el.addEventListener('touchend',e=>{e.preventDefault();el.classList.remove('pressed');},{passive:false});
+  el.addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();el.classList.add('pressed');fn();},{passive:false});
+  el.addEventListener('touchend',e=>{e.preventDefault();e.stopPropagation();el.classList.remove('pressed');},{passive:false});
   el.addEventListener('click',fn);
 }
 setupBtn('btn-a',()=>{
@@ -4519,6 +5939,8 @@ setupBtn('btn-a',()=>{
   }
   if(G.screen==='unlock'){G.screen='world';return;}
   if(G.screen==='item_reward'){G.screen='world';G.pendingItemReward=null;return;}
+  if(G.screen==='spaceship_return_prompt'||G.screen==='spaceship_fight_prompt'){G.screen='world';return;}
+  if(G.screen==='alien_sudoku'){G.screen='world';sfx('menu');return;}
   if(G.screen==='world'){
     doZAction(false);
   }
@@ -4539,11 +5961,13 @@ setupBtn('btn-b',()=>{
   const bEl = document.getElementById('btn-b');
   bEl.addEventListener('touchstart', e => {
     e.preventDefault();
+    e.stopPropagation();
     bEl.classList.add('pressed');
     G.keys['_run'] = true;
   }, {passive: false});
   bEl.addEventListener('touchend', e => {
     e.preventDefault();
+    e.stopPropagation();
     bEl.classList.remove('pressed');
     delete G.keys['_run'];
   }, {passive: false});
@@ -4923,8 +6347,8 @@ function drawItemReward(){
   T('ITEM ACQUIRED!',240,90,9,'#c02828','center');
   X.fillStyle='#c02828';X.fillRect(76,96,328,3);
 
-  // Draw rake sprite
-  drawRakeSprite(X,240,190,3);
+  if(r.sprite==='jumpbeans') drawJumpBeansSprite(X,240,190,3);
+  else drawRakeSprite(X,240,190,3);
 
   T(r.name,240,240,8,'#303848','center');
   r.desc.split('\n').forEach((l,i)=>T(l,240,264+i*18,6,'#607080','center'));
@@ -4934,6 +6358,19 @@ function drawItemReward(){
   else
     G.buttons.push({x:180,y:330,w:120,h:28,label:'item_ok',action:finishItemReward});
   T('press A to continue',240,370,5,'#909898','center');
+}
+
+function drawJumpBeansSprite(ctx,cx,cy,s){
+  const pulse=0.7+0.3*Math.abs(Math.sin(G.tick*0.12));
+  for(let i=0;i<3;i++){
+    const bx=cx-10+i*10, by=cy-4+Math.sin(G.tick*0.15+i)*2;
+    ctx.fillStyle=i===0?'#40c060':(i===1?'#60e080':'#80ffa0');
+    ctx.beginPath(); ctx.ellipse(bx,by,5*s,7*s,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=`rgba(120,255,180,${pulse})`;
+    ctx.fillRect(bx-2,by-8,4,3);
+  }
+  ctx.fillStyle=`rgba(80,220,255,${pulse*0.5})`;
+  ctx.beginPath(); ctx.arc(cx,cy-14,10*s,0,Math.PI*2); ctx.fill();
 }
 
 function drawRakeSprite(ctx,cx,cy,s){
@@ -5010,6 +6447,7 @@ function doRakeAction(){
 
 // Reset one-visit interactions when entering their zones
 function onEnterZone(z){
+  showZoneName(z);
   if(z===1){
     G.fruitTrees={checked:{}};
   }
@@ -5017,6 +6455,10 @@ function onEnterZone(z){
     G.rake.rakedTiles={};
     G.rake.lastZone=2;
   }
+}
+
+function showZoneName(z){
+  if(z && z!=='pc') G.zoneNameTimer = 300; // 5 s at 60 fps
 }
 
 // ═══════════════════════════════════════════════
@@ -5392,6 +6834,7 @@ function enterHighBiome(){
   G.player.x=5*TW;G.player.y=17*TW;G.player.dir=2;
   G.player.visX=G.player.x;G.player.visY=G.player.y;
   G.moveDelay=12;
+  showZoneName('high');
   G.pcMsg='You scramble into\nHIGH, HIGH, HIGH.\nEverything is very bright.';
   G.pcMsgTimer=260;
   G.screen='world';
@@ -6371,6 +7814,10 @@ Object.assign(BUGS, {
   diver:    {name:'DIVING BEETLE', type:'AQUATIC', hp:52,atk:16,def:14,spd:12,zone:2, trainerOnly:true, moves:['Plunge','Submarine','Surf Slash','Pincer']},
   mayfly:   {name:'MAYFLY',        type:'FLYING',  hp:34,atk:17,def:7, spd:22,zone:3, trainerOnly:true, moves:['Ephemeral','Gust','Flash Burst','Dart']},
   pillbug:  {name:'PILLBUG',       type:'BEETLE',  hp:60,atk:12,def:18,spd:8, zone:3, trainerOnly:true, moves:['Roll Up','Armour Up','Bash','Guard']},
+  radroach: {name:'RADIOACTIVE COCKROACH',type:'BEETLE',hp:58,atk:22,def:14,spd:14,zone:'spaceship',trainerOnly:true,moves:['Rot Crush','Decay Spray','Raptor Slash','Bite']},
+  cyberant: {name:'CYBER ANT',     type:'BEETLE',  hp:50,atk:20,def:18,spd:16,zone:'spaceship',trainerOnly:true,moves:['Iron Carapace','Raptor Slash','Quick Dart','Lunge']},
+  fruitfly: {name:'FRUIT FLY',     type:'FLYING',  hp:38,atk:18,def:9, spd:24,zone:'spaceship',trainerOnly:true,moves:['Buzz Dive','Dart','Flash Burst','Gust']},
+  beanmoth: {name:'INTERGALACTIC BEAN MOTH',type:'FLYING',hp:52,atk:18,def:11,spd:22,zone:'spaceship',fruitOnly:true,moves:['Wing Gale','Flash Burst','Sky Cutter','Migration Rush']},
 });
 Object.assign(MOVES, {
   'Stink Cloud':{p:0,a:1,e:'espd-',t:'MOLD'},
@@ -6578,12 +8025,96 @@ function spPillbug(c,cx,cy,s,f){
   c.restore();
 }
 
+// ─── RADIOACTIVE COCKROACH ───
+function spRadroach(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-10*s;
+  const glow=0.5+0.5*Math.abs(Math.sin(G.tick*0.1));
+  PX(c,o,t,2,4,20,12,'#2a4020',s);
+  PX(c,o,t,4,5,16,10,'#3a5828',s);
+  PX(c,o,t,6,6,12,8,'#4a6830',s);
+  PX(c,o,t,8,5,2,2,'#c81810',s);
+  PX(c,o,t,14,5,2,2,'#c81810',s);
+  PX(c,o,t,1,8,4,3,'#2a4020',s);
+  PX(c,o,t,19,8,4,3,'#2a4020',s);
+  c.fillStyle=`rgba(80,255,60,${glow})`;
+  c.fillRect(o+4*s,t+2*s,16*s,4*s);
+  c.fillStyle=`rgba(180,255,80,${glow*0.5})`;
+  c.beginPath();c.arc(o+10*s,t+8*s,8*s,0,Math.PI*2);c.fill();
+  c.restore();
+}
+
+// ─── CYBER ANT (half ant, half robot) ───
+function spCyberant(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-12*s,t=cy-12*s;
+  PX(c,o,t,4,6,8,10,'#3a2818',s);
+  PX(c,o,t,12,6,8,10,'#607088',s);
+  PX(c,o,t,5,7,6,8,'#5a4028',s);
+  PX(c,o,t,13,7,6,8,'#8098b0',s);
+  PX(c,o,t,6,4,4,4,'#2a1810',s);
+  PX(c,o,t,14,4,4,4,'#304858',s);
+  PX(c,o,t,7,2,2,2,'#c81810',s);
+  PX(c,o,t,15,2,2,2,'#40c0ff',s);
+  PX(c,o,t,1,10,3,4,'#3a2818',s);
+  PX(c,o,t,18,10,3,4,'#506878',s);
+  const pulse=0.6+0.4*Math.sin(G.tick*0.12);
+  c.fillStyle=`rgba(64,200,255,${pulse})`;
+  c.fillRect(o+14*s,t+4*s,4*s,2*s);
+  c.fillRect(o+15*s,t+10*s,3*s,2*s);
+  c.restore();
+}
+
+// ─── FRUIT FLY (alien crew) ───
+function spAlienFruitfly(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-8*s,t=cy-10*s;
+  c.fillStyle='rgba(255,180,80,0.45)';
+  c.fillRect(o-4*s,t,t+4*s,12*s);
+  c.fillRect(o+12*s,t,t+4*s,12*s);
+  PX(c,o,t,6,8,4,6,'#c06020',s);
+  PX(c,o,t,5,6,6,4,'#e08030',s);
+  PX(c,o,t,7,4,2,2,'#1a1010',s);
+  PX(c,o,t,9,4,2,2,'#1a1010',s);
+  PX(c,o,t,6,2,4,2,'#802010',s);
+  c.restore();
+}
+
+// ─── INTERGALACTIC BEAN MOTH ───
+function spBeanmoth(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-14*s,t=cy-12*s;
+  const pulse=0.5+0.5*Math.abs(Math.sin(G.tick*0.08));
+  c.fillStyle=`rgba(80,180,255,${0.35+pulse*0.35})`;
+  c.fillRect(o-6*s,t+2*s,10*s,14*s);
+  c.fillRect(o+18*s,t+2*s,10*s,14*s);
+  PX(c,o,t,6,6,16,10,'#4080c0',s);
+  PX(c,o,t,8,8,12,8,'#60a8e8',s);
+  PX(c,o,t,10,4,8,6,'#204060',s);
+  PX(c,o,t,11,5,2,2,'#a0e8ff',s);
+  PX(c,o,t,13,5,2,2,'#a0e8ff',s);
+  c.strokeStyle=`rgba(120,255,255,${pulse})`;
+  c.lineWidth=2;
+  c.beginPath();c.moveTo(o+14*s,t+10*s);c.lineTo(o+14*s,t+18*s);c.stroke();
+  c.fillStyle=`rgba(180,240,255,${pulse})`;
+  c.beginPath();c.arc(o+14*s,t+20*s,3*s,0,Math.PI*2);c.fill();
+  c.restore();
+}
+
 SFN.stinkbug = spStinkbug;
 SFN.worm = spWorm;
 SFN.boatman = spBoatman;
 SFN.diver = spDiver;
 SFN.mayfly = spMayfly;
 SFN.pillbug = spPillbug;
+SFN.radroach = spRadroach;
+SFN.cyberant = spCyberant;
+SFN.fruitfly = spAlienFruitfly;
+SFN.beanmoth = spBeanmoth;
 
 // ─── SILK COCOON ───
 function spSilkCocoon(c,cx,cy,s,f){
@@ -6896,13 +8427,14 @@ function drawTrainerBattleSprite(ctx, x, y, sprite){
 // ═══════════════════════════════════════════════════════════════════
 
 const EDITOR_ZONES=[
-  {id:1,      label:'Mossy Woods'},
-  {id:2,      label:'Murky Pond'},
-  {id:3,      label:'Mushroom Hollow'},
-  {id:'high', label:'High High High'},
-  {id:'hive', label:'The Hive'},
-  {id:'shrine', label:"Queen's Sanctum"},
-  {id:'pc',   label:'Entomology Dept'},
+  {id:1,          label:'Mossy Woods'},
+  {id:2,          label:'Murky Pond'},
+  {id:3,          label:'Mushroom Hollow'},
+  {id:'high',     label:'High High High'},
+  {id:'hive',     label:'The Hive'},
+  {id:'shrine',   label:"Queen's Sanctum"},
+  {id:'pc',       label:'Entomology Dept'},
+  {id:'spaceship',label:'Out of This World'},
 ];
 
 const EDITOR_TILES=[
@@ -6925,6 +8457,13 @@ const EDITOR_TILES=[
   {v:33, label:'Shrine',       solid:false,enc:false},
   {v:36, label:'Nest Wall',    solid:true, enc:false},
   {v:37, label:'Nest Tree',    solid:true, enc:false},
+  // Spaceship tiles
+  {v:40, label:'Ship Floor',   solid:false,enc:false},
+  {v:41, label:'Console Floor',solid:false,enc:false},
+  {v:42, label:'Control Bank', solid:true, enc:false},
+  {v:43, label:'Engine Core',  solid:true, enc:false},
+  {v:44, label:'Entry Hatch',  solid:false,enc:false},
+  {v:45, label:'Porthole',     solid:false,enc:false},
 ];
 
 const CUSTOM_TILE_BASE=100;
@@ -6968,7 +8507,10 @@ function edTileSwatch(tileV, zoneId){
   const _X=X, _zone=G.zone;
   X=_swatchCtx; G.zone=zoneId;
   for(let dy=0;dy<3;dy++) for(let dx=0;dx<3;dx++){
-    try{ drawTile(tileV,dx*TW,dy*TW,dx,dy); }catch(e){}
+    try{
+      if(zoneId==='spaceship') drawTileSpaceship(tileV,dx*TW,dy*TW,dx,dy);
+      else drawTile(tileV,dx*TW,dy*TW,dx,dy);
+    }catch(e){}
   }
   X=_X; G.zone=_zone;
   return _swatchCanvas.toDataURL();
@@ -7503,7 +9045,10 @@ function edRender(){
       const sx=tx*TW-ED.camX/ED.zoom, sy=ty*TW-ED.camY/ED.zoom;
       if(sx+TW<0||sy+TW<0||sx>W/ED.zoom||sy>H/ED.zoom) continue;
       const t=map[ty][tx];
-      try{drawTile(t,sx,sy,tx,ty);}catch(e){}
+      try{
+        if(ED.zone==='spaceship') drawTileSpaceship(t,sx,sy,tx,ty);
+        else drawTile(t,sx,sy,tx,ty);
+      }catch(e){}
       if(t>=CUSTOM_TILE_BASE){
         const ct=CUSTOM_TILE_REG[t-CUSTOM_TILE_BASE];
         if(ct){
@@ -7538,7 +9083,10 @@ function edRender(){
       ctx.save();ctx.beginPath();ctx.rect(W-ps-2,2,ps,ps);ctx.clip();
       const _X2=X,_z2=G.zone;X=ctx;G.zone=ED.zone;
       ctx.scale(ps/TW,ps/TW);
-      try{drawTile(ED.brush,(W-ps-2)*TW/ps,2*TW/ps,0,0);}catch(e){}
+      try{
+        if(ED.zone==='spaceship') drawTileSpaceship(ED.brush,(W-ps-2)*TW/ps,2*TW/ps,0,0);
+        else drawTile(ED.brush,(W-ps-2)*TW/ps,2*TW/ps,0,0);
+      }catch(e){}
       ctx.setTransform(1,0,0,1,0,0);
       X=_X2;G.zone=_z2;
       ctx.restore();
@@ -8200,7 +9748,7 @@ function edWarpToZone(zid, mode){
     else G.unlockedZones=new Set([1,2,3,'high','hive','shrine']);
   }
 
-  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14}};
+  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20}};
   const sp=spawns[zid]||{x:14,y:14};
   G.zone=zid;
   G.prevZone=typeof zid==='number'?zid:1;
@@ -8217,7 +9765,7 @@ function edWarpToZone(zid, mode){
 // ── Download ──
 function downloadEditor(){
   const mapData={};
-  [1,2,3,'high','hive','pc'].forEach(z=>{
+  [1,2,3,'high','hive','pc','spaceship'].forEach(z=>{
     if(MAPS[z]) mapData[z]=Array.from(MAPS[z]).map(row=>Array.from(row));
   });
   const src=document.documentElement.outerHTML;
