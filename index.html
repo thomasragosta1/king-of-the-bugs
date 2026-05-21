@@ -275,10 +275,7 @@ const G={
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, jumpBeans:0, jumpBeansSteps:0, honey:0, madHoney:0},
-  spaceshipCrewDefeated:false,
-  spaceshipReturn:null,
-  sudoku:null,
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, honey:0, madHoney:0, igBean:0, igBeanSteps:0},
   beeNestTrees:{checked:{}},
   // Rake system
   rake:{
@@ -346,6 +343,19 @@ const BUGS={
   hornet:   {name:'HORNET',        type:'FLYING',  hp:52,atk:24,def:12,spd:18,zone:'hive', moves:['Sting','Giant Horn','Buzz Dive','Sky Cutter']},
   honeybee: {name:'HONEYBEE',      type:'FLYING',  hp:40,atk:16,def:14,spd:20,zone:'hive', moves:['Sting','Pollen Toss','Hive Rush','Dodge']},
   queenbee: {name:'QUEEN BEE',     type:'FLYING',  hp:70,atk:28,def:18,spd:16,zone:'hive', shrineOnly:true, moves:['Hive Rush','Giant Horn','Sky Cutter','Thunder Buzz']},
+  // Alien bugs — zone:'spaceship', trio NPC only
+  radiocockroach:{name:'RADIO COCKROACH', type:'BEETLE', hp:64,atk:22,def:16,spd:10,zone:'spaceship',alienOnly:true, moves:['Radiant Slam','Toxic Shell','Nuke Bite','Armour Up']},
+  cyberant:      {name:'CYBER ANT',       type:'BEETLE', hp:56,atk:26,def:14,spd:18,zone:'spaceship',alienOnly:true, moves:['Circuit Crush','Laser Drill','Iron Carapace','Lunge']},
+  fruitfly:      {name:'FRUIT FLY',       type:'FLYING', hp:44,atk:18,def:8, spd:28,zone:'spaceship',alienOnly:true, moves:['Zip Dart','Static Buzz','Dodge','Gust']},
+  // Intergalactic jumping bean — hatches after 1679 steps
+  igbean:        {name:'I.G. BEAN',       type:'MOLD',   hp:38,atk:5, def:18,spd:2, zone:'spaceship',beanOnly:true,  moves:['Wiggle']},
+  beanmoth:      {name:'BEAN MOTH',       type:'FLYING', hp:54,atk:20,def:11,spd:26,zone:'spaceship',beanOnly:true,  moves:['Ion Gale','Static Buzz','Zip Dart','Electric Surge']},
+  // Wreckage / desert bugs
+  dlocust:  {name:'DESERT LOCUST',  type:'FLYING', hp:42,atk:16,def:8, spd:24,zone:'wreckage', moves:['Gust','Zip Dart','Static Buzz','Dodge']},
+  velvetant:{name:'VELVET ANT',     type:'BEETLE', hp:50,atk:20,def:12,spd:14,zone:'wreckage', moves:['Sting','Lunge','Toxic Shell','Bite']},
+  darkbeetle:{name:'DARKLING BEETLE',type:'BEETLE',hp:56,atk:14,def:20,spd:6, zone:'wreckage', moves:['Armour Up','Bash','Shell Break','Guard']},
+  desertant: {name:'DESERT ANT',    type:'BEETLE', hp:38,atk:15,def:10,spd:20,zone:'wreckage', moves:['Bite','Quick Dart','Lunge','Iron Carapace']},
+  antlion:   {name:'ANTLION',       type:'MOLD',   hp:60,atk:22,def:14,spd:10,zone:'wreckage', trainerOnly:true, moves:['Sand Trap','Jaw Snap','Dig','Smother']},
 };
 // ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
 const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
@@ -370,6 +380,12 @@ Object.assign(MOVES,{
   'Raptor Slash':{p:13,a:.85,t:'BEETLE'},'Hive Rush':{p:12,a:.9,t:'FLYING'},'Aqua Lance':{p:12,a:.9,t:'AQUATIC'},'Spore Bomb':{p:12,a:.88,t:'MOLD'},
   'Sky Cutter':{p:13,a:.85,t:'FLYING'},'Shell Break':{p:13,a:.82,t:'BEETLE'},'Tidal Crush':{p:14,a:.8,t:'AQUATIC'},'Bloom Haze':{p:0,a:1,e:'espd-',t:'MOLD'},
   'Thunder Buzz':{p:14,a:.82,t:'FLYING'},'Root Snare':{p:10,a:.95,t:'MOLD'},'Giant Horn':{p:15,a:.78,t:'BEETLE'},'Current Guard':{p:0,a:1,e:'def+',t:'AQUATIC'},
+  // Alien + bean moth moves
+  'Radiant Slam':{p:13,a:.85,t:'BEETLE'},'Toxic Shell':{p:0,a:1,e:'def+',t:'BEETLE'},'Nuke Bite':{p:16,a:.78,t:'BEETLE'},
+  'Circuit Crush':{p:14,a:.82,t:'BEETLE'},'Laser Drill':{p:15,a:.80,t:'BEETLE'},
+  'Zip Dart':{p:11,a:.95,t:'FLYING'},'Static Buzz':{p:12,a:.88,t:'FLYING'},
+  'Ion Gale':{p:13,a:.88,t:'FLYING'},'Electric Surge':{p:16,a:.78,t:'FLYING'},
+  'Sand Trap':{p:10,a:.9,t:'MOLD'},
 });
 const LEARNSETS={
   ambush:[[6,'Raptor Slash'],[11,'Shell Break']],firefly:[[6,'Sky Cutter'],[12,'Thunder Buzz']],strider:[[6,'Aqua Lance'],[11,'Current Guard']],
@@ -384,6 +400,15 @@ const LEARNSETS={
   hornet:[[9,'Giant Horn'],[14,'Thunder Buzz']],
   honeybee:[[7,'Hive Rush'],[12,'Sky Cutter']],
   queenbee:[[12,'Thunder Buzz'],[16,'Thunder Buzz']],
+  radiocockroach:[[10,'Radiant Slam'],[15,'Nuke Bite']],
+  cyberant:[[10,'Circuit Crush'],[15,'Laser Drill']],
+  fruitfly:[[10,'Static Buzz'],[14,'Ion Gale']],
+  beanmoth:[[9,'Ion Gale'],[14,'Electric Surge']],
+  dlocust:[[8,'Sky Cutter'],[13,'Thunder Buzz']],
+  velvetant:[[8,'Raptor Slash'],[13,'Nuke Bite']],
+  darkbeetle:[[9,'Giant Horn'],[14,'Shell Break']],
+  desertant:[[7,'Circuit Crush'],[12,'Raptor Slash']],
+  antlion:[[10,'Root Snare'],[14,'Spore Bomb']],
 };
 
 // G.loadout: array of instance objects with their own level/xp/hp.
@@ -512,7 +537,7 @@ function getSlotInfo(n){
 }
 
 const SAVE_VERSION = 2;
-const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, jumpBeans:0, jumpBeansSteps:0, honey:0, madHoney:0};
+const DEFAULT_INVENTORY = {lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0};
 
 function clonePlain(value, fallback){
   if(value === undefined || value === null) return fallback;
@@ -580,7 +605,7 @@ function normalizeSavedLoadout(saved){
 }
 
 function resetAllMaps(){
-  [1,2,3,'high','hive','shrine','pc','spaceship'].forEach(z=>resetMap(z));
+  [1,2,3,'high','hive','shrine','pc','spaceship','wreckage'].forEach(z=>resetMap(z));
 }
 
 function getSaveData(){
@@ -616,11 +641,6 @@ function getSaveData(){
     _uid:         _uidCounter,
     alienActive:  !!(G.alien && G.alien.active),
     alienPhase:   G.alien ? G.alien.phase : null,
-    alienReturnZone: G.alienReturnZone,
-    alienReturnX:    G.alienReturnX,
-    alienReturnY:    G.alienReturnY,
-    spaceshipCrewDefeated: !!G.spaceshipCrewDefeated,
-    sudoku: clonePlain(G.sudoku, null),
   };
 }
 
@@ -693,21 +713,6 @@ function loadFromSlot(n){
     if(G.boatmanTraded){
       const trader = NPCS.find(npc => npc.isTrader);
       if(trader) trader.defeated = true;
-    }
-    G.alienReturnZone = d.alienReturnZone !== undefined ? d.alienReturnZone : G.zone;
-    G.alienReturnX = d.alienReturnX !== undefined ? d.alienReturnX : G.player.x;
-    G.alienReturnY = d.alienReturnY !== undefined ? d.alienReturnY : G.player.y;
-    G.spaceshipCrewDefeated = !!d.spaceshipCrewDefeated;
-    G.sudoku = d.sudoku ? clonePlain(d.sudoku, null) : null;
-    if(d.alienActive && d.alienPhase){
-      G.alien = G.alien || {};
-      G.alien.active = true;
-      G.alien.phase = d.alienPhase;
-      G.alien.overlayAlpha = 0;
-      G.alien.countdownActive = false;
-      G.alien.spaceScrollY = G.alien.spaceScrollY || 0;
-    } else if(!d.alienActive){
-      G.alien = null;
     }
     resetAllMaps();
     G.battleParty = buildBattleParty();
@@ -1455,14 +1460,14 @@ function buildMap(z){
   return m;
 }
 
-function getMap(z){if(!MAPS[z])MAPS[z]= z==='spaceship' ? buildSpaceshipMap() : buildMap(z);return MAPS[z];}
+function getMap(z){if(!MAPS[z])MAPS[z]= z==='spaceship' ? buildSpaceshipMap() : z==='wreckage' ? buildWreckageMap() : buildMap(z);return MAPS[z];}
 function gt(z,tx,ty){
   if(tx<0||ty<0||tx>=WIDE||ty>=TALL)return 2;
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43;}
-function isEncounter(t){return t===1||t===7||t===9||t===27||t===30;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43&&t!==46&&t!==48&&t!==49&&t!==51&&t!==52&&t!==53;}
+function isEncounter(t){return t===1||t===7||t===9||t===27||t===30||t===50;}
 function isWater(t){return t===7;}
 
 // ═══════════════════════════════════════════════
@@ -2120,7 +2125,7 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 // WORLD DRAW
 // ═══════════════════════════════════════════════
-const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD'};
+const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD',wreckage:'THE WRECKAGE'};
 
 function snapPlayerToTile(){
   const p=G.player;
@@ -2147,7 +2152,7 @@ function drawWorld(){
 
     if(G.moveDelay > 0) G.moveDelay--;
     const visAtTile = Math.abs(p.visX-p.x)<0.5 && Math.abs(p.visY-p.y)<0.5;
-    if(visAtTile && G.moveDelay===0 && G.screen==='world'){
+    if(visAtTile && G.moveDelay===0){
       let dx=0,dy=0;
       if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
       else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
@@ -2157,7 +2162,7 @@ function drawWorld(){
         const nx=p.x+dx*TW, ny=p.y+dy*TW;
         const tx=Math.round(nx/TW), ty=Math.round(ny/TW);
         const tile=gt('spaceship',tx,ty);
-        if(walkable(tile)){p.x=nx;p.y=ny; countBugStep();}
+        if(walkable(tile)){p.x=nx;p.y=ny;}
       }
     }
     const _spd=1.4;
@@ -2174,8 +2179,67 @@ function drawWorld(){
     }
 
     updateAlien();
-    if(G.screen==='spaceship_return') updateSpaceshipReturn();
-    drawWorldHUD();
+
+    // ── Alien fight prompt ──
+    if(G._alienFightPrompt){
+      G._alienFightPromptTimer = (G._alienFightPromptTimer||0) - 1;
+      panel(0, 358, 480, 74, '#0a0c18');
+      X.fillStyle='#303848'; X.fillRect(0, 358, 480, 3);
+      T('CREW: "You dare challenge the collective?', 14, 378, 6, '#c0e8ff');
+      T('Prepare yourself."', 14, 394, 6, '#c0e8ff');
+      BTN(20, 400, 130, 24, '⚔ FIGHT', ()=>{
+        G._alienFightPrompt=false;
+        triggerAlienTrioBattle();
+      });
+      BTN(170, 400, 100, 24, '✗ BACK', ()=>{
+        G._alienFightPrompt=false;
+        G.pcMsgTimer=0;
+      });
+      if(G._alienFightPromptTimer<=0){ G._alienFightPrompt=false; G.pcMsgTimer=0; }
+    }
+
+    // ── Return to Earth prompt ──
+    if(G._returnEarthPrompt){
+      G._returnEarthTimer = (G._returnEarthTimer||0) - 1;
+      panel(0, 358, 480, 74, '#0a0c18');
+      X.fillStyle='#303848'; X.fillRect(0, 358, 480, 3);
+      T('A sleek chair with a glowing headset...', 14, 378, 6, '#c0e8ff');
+      T('Wish to return to Earth?', 14, 394, 6, '#a0c8e0');
+      BTN(20, 400, 130, 24, '✓ YES', ()=>{
+        G._returnEarthPrompt=false;
+        startReturnToEarth();
+      });
+      BTN(170, 400, 100, 24, '✗ NO', ()=>{
+        G._returnEarthPrompt=false;
+        G.pcMsgTimer=0;
+      });
+      if(G._returnEarthTimer<=0){ G._returnEarthPrompt=false; G.pcMsgTimer=0; }
+    }
+
+    // ── Flask heal prompt ──
+    if(G._flaskHealPrompt){
+      G._flaskHealTimer = (G._flaskHealTimer||0) - 1;
+      panel(0, 358, 480, 74, '#0a0c18');
+      X.fillStyle='#303848'; X.fillRect(0, 358, 480, 3);
+      T('A strange liquid... something compels you', 14, 378, 6, '#80ffb0');
+      T('to throw your bugs in?', 14, 394, 6, '#60d890');
+      BTN(20, 400, 130, 24, '✓ THROW IN', ()=>{
+        G._flaskHealPrompt=false;
+        flaskHealParty();
+      });
+      BTN(170, 400, 100, 24, '✗ LEAVE IT', ()=>{
+        G._flaskHealPrompt=false;
+        G.pcMsgTimer=0;
+      });
+      if(G._flaskHealTimer<=0){ G._flaskHealPrompt=false; G.pcMsgTimer=0; }
+    }
+
+    // ── Return-to-earth electric animation ──
+    if(G._returnToEarth){
+      drawReturnToEarthAnim();
+    }
+
+
     BTN(348,4,128,26,'MENU',openMenuFromWorld);
     drawSaveToast();
     return;
@@ -2211,7 +2275,7 @@ function drawWorld(){
         p.x=nx;p.y=ny;
         countBugStep();
         // No moveDelay set on normal walk — next step triggers when visual arrives
-        if(isEncounter(tile)&&Math.random()<.13)triggerEnc();
+        if(isEncounter(tile)&&Math.random()<(tile===50?.065:.13))triggerEnc();
         if(tile===6)doPortal(tx,ty);
         if(tile===11)enterPC();      // walk into PC door
         if(tile===12)exitPC();       // walk out of PC
@@ -2329,13 +2393,17 @@ function drawWorld(){
     const tile=map[ty][tx];
     const sx=tx*TW-camX,sy=ty*TW-camY;
     if(sx<-TW||sx>496||sy<-TW||sy>448)continue;
-    drawTile(tile,sx,sy,tx,ty);
+    if(G.zone==='wreckage') drawTileWreckage(tile,sx,sy,tx,ty);
+    else drawTile(tile,sx,sy,tx,ty);
   }
 
-  // Draw Dr. Marshall behind the lab desk (same scale as player sprite)
   if(G.zone==='pc'){
     const drX=15*TW-camX, drY=8*TW-camY;
     drawDrMarshallSmall(X,drX,drY);
+  }
+  if(G.zone==='wreckage'){
+    const cX=16*TW-camX, cY=21*TW-camY;
+    drawCamelSprite(X,cX,cY,1.4);
   }
 
   // NPC trainers
@@ -2433,7 +2501,7 @@ function startBattleTransition(){
 }
 
 function wildEncounterPool(zone){
-  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly&&!BUGS[id].fruitOnly&&!BUGS[id].shrineOnly);
+  return Object.keys(BUGS).filter(id=>BUGS[id].zone===zone&&!BUGS[id].starter&&!BUGS[id].trainerOnly&&!BUGS[id].rakeOnly&&!BUGS[id].fruitOnly&&!BUGS[id].shrineOnly&&!BUGS[id].alienOnly&&!BUGS[id].beanOnly);
 }
 
 function chooseWildEncounterId(zone){
@@ -2501,10 +2569,9 @@ function drawHatch(){
   const h=G.pendingHatch;
   if(!h){G.screen='world';return;}
   const isMonarch=h.species==='monarch';
-  const isBean=h.species==='beanmoth';
-  const fromName=isBean?'INTERGALACTIC\nJUMPING BEANS':(isMonarch?'COCOON':'SILK COCOON');
-  const toName=isBean?'INTERGALACTIC\nBEAN MOTH':(isMonarch?'MONARCH':'SILK MOTH');
-  const toId=isBean?'beanmoth':(isMonarch?'monarch':'silkmoth');
+  const fromName=isMonarch?'COCOON':'SILK COCOON';
+  const toName=isMonarch?'MONARCH':'SILK MOTH';
+  const toId=isMonarch?'monarch':'silkmoth';
 
   // Animated sparkle bg
   X.fillStyle='#0e1030';X.fillRect(0,0,480,432);
@@ -2526,8 +2593,7 @@ function drawHatch(){
   // Left: cocoon
   X.fillStyle='rgba(200,180,140,0.3)';X.fillRect(40,100,180,220);
   T(fromName,130,118,5,'#907060','center');
-  if(isBean) drawJumpBeansSprite(X,130,220,2.2);
-  else if(isMonarch) spCocoon(X,130,220,3,false);
+  if(isMonarch) spCocoon(X,130,220,3,false);
   else spSilkCocoon(X,130,220,3,false);
 
   // Arrow
@@ -2580,11 +2646,11 @@ function countBugStep(){
       sfx('levelup');
     }
   }
-  if((G.inventory.jumpBeans||0)>0){
-    G.inventory.jumpBeansSteps=(G.inventory.jumpBeansSteps||0)+1;
-    if(G.inventory.jumpBeansSteps>=1679){
-      G.inventory.jumpBeans--;
-      G.inventory.jumpBeansSteps=0;
+  if((G.inventory.igBean||0)>0){
+    G.inventory.igBeanSteps=(G.inventory.igBeanSteps||0)+1;
+    if(G.inventory.igBeanSteps>=1679){
+      G.inventory.igBean--;
+      G.inventory.igBeanSteps=0;
       G.pendingHatch={species:'beanmoth'};
       G.screen='hatch';
       sfx('levelup');
@@ -2744,20 +2810,33 @@ function recoverAfterWhiteout(){
   G.battleParty=buildBattleParty();
   G.battleMsg='';G.battlePhase='action';G.pendingAction=null;G.swapMode=false;
   G.naming=false;G.nameTarget=null;G.nameStr='';
-  G.prevZone=1;
-  G.zone='pc'; resetMap('pc');
-  G.player.x=15*TW; G.player.y=18*TW; G.player.dir=0;
-  G.player.visX=G.player.x; G.player.visY=G.player.y;
-  G.moveDelay=20;
-  G.pcMsg='Dr. Marshall:\nYou fainted out there.\nI patched up your bugs.\nTake a breath before\nyou head back.';
-  G.pcMsgTimer=300;
+  // Respawn at wreckage if player has been there, otherwise PC
+  const useWreckage=G.unlockedZones&&G.unlockedZones.has('wreckage');
+  if(useWreckage){
+    G.prevZone='wreckage';
+    G.zone='wreckage'; resetMap('wreckage');
+    G.player.x=14*TW; G.player.y=15*TW; G.player.dir=2;
+    G.player.visX=G.player.x; G.player.visY=G.player.y;
+    G.moveDelay=20;
+    showZoneName('wreckage');
+    G.pcMsg='CAMEL MAN JOAD:\n"You blacked out out\nthere. The camel found\nyou. Your bugs are\npatched up."';
+    G.pcMsgTimer=300;
+  } else {
+    G.prevZone=1;
+    G.zone='pc'; resetMap('pc');
+    G.player.x=15*TW; G.player.y=18*TW; G.player.dir=0;
+    G.player.visX=G.player.x; G.player.visY=G.player.y;
+    G.moveDelay=20;
+    G.pcMsg='Dr. Marshall:\nYou fainted out there.\nI patched up your bugs.\nTake a breath before\nyou head back.';
+    G.pcMsgTimer=300;
+  }
   G.screen='world';
 }
 
 // ═══════════════════════════════════════════════
 // BATTLE
 // ═══════════════════════════════════════════════
-const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'},hive:{sky:'#f8e840',hor:'#f0c010',gnd:'#50a028',gnd2:'#70c848',plat:'#d4a820'},shrine:{sky:'#f0c840',hor:'#d4900a',gnd:'#a06000',gnd2:'#c08010',plat:'#f0d060'}};
+const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'},hive:{sky:'#f8e840',hor:'#f0c010',gnd:'#50a028',gnd2:'#70c848',plat:'#d4a820'},shrine:{sky:'#f0c840',hor:'#d4900a',gnd:'#a06000',gnd2:'#c08010',plat:'#f0d060'},wreckage:{sky:'#d4a060',hor:'#e8b870',gnd:'#c8a050',gnd2:'#d4b468',plat:'#a08040'}};
 // Draw a bug net (handle + hoop + mesh bag) at position (cx,cy), rotated by angle.
 // cx,cy = centre of the hoop. angle = rotation of the whole tool (0 = handle pointing left).
 function drawBugNet(ctx, cx, cy, angle, meshOpen){
@@ -3560,14 +3639,10 @@ function afterResult(){
         // Don't mark NPC defeated yet; we'll do that after the player sees the reward screen.
         G.battlePhase = 'trainer-defeat';
         G.trainerAnimT = 0;
-        if(tr.npc && tr.npc.isAlienCrew){
-          awardAlienCrewBeans();
-          G.pendingReward = null;
-          G.battleMsg = tr.name + ':\n' + tr.npc.afterMsg;
-        } else {
-          G.pendingReward = tr.rewardId || null;
-          G.battleMsg = tr.name + ':\n' + (tr.npc.afterMsg || ('Good fight!\nTake my ' + (tr.rewardId ? BUGS[tr.rewardId].name : 'thanks!') + '.'));
-        }
+        G.pendingReward = tr.rewardId || null;
+        // igBean is an inventory item reward, not a catchable bug
+        const rewardLabel = tr.rewardId === 'igBean' ? 'Intergalactic Jumping Bean' : (tr.rewardId ? BUGS[tr.rewardId].name : 'thanks!');
+        G.battleMsg = tr.name + ':\n' + (tr.npc.afterMsg || ('Good fight!\nTake my ' + rewardLabel + '.'));
         return;
       }
     }
@@ -3676,7 +3751,7 @@ function doZAction(allowRake=true){
   const p=G.player, tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
 
   // Spaceship interior interactions
-  if(G.zone === 'spaceship' && G.screen === 'world'){
+  if(G.zone === 'spaceship'){
     const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
     const[ddx,ddy]=dirs[p.dir]||[0,1];
     interactSpaceshipTile(tx+ddx, ty+ddy);
@@ -3704,17 +3779,25 @@ function interactWithFacingNPC(){
   const npc=getTalkNPC();
   if(!npc)return false;
   snapPlayerToTile();
+  if(npc.isCamelMan){talkToCamelMan(npc);return true;}
   if(npc.isPig){talkToPig(npc);return true;}
   if(npc.isTrader){talkToBoatman(npc);return true;}
   if(npc.isQueen){interactHiveShrine();return true;}
   if(!npc.defeated){triggerTrainerBattle(npc);return true;}
+  // Post-defeat wreckage NPCs
+  if(npc.zone==='wreckage'){
+    if(npc.itemReward==='metalDetector'&&!G.inventory.metalDetector){
+      giveMetalDetector(); npc.itemReward=null; return true;
+    }
+    G.pcMsg=`${npc.name}:\n${npc.afterMsg||'Good fight.'}`;
+    G.pcMsgTimer=200;
+    return true;
+  }
   // Zone-3 beaten NPCs: if hive is unlocked, direct player there
   if(npc.zone===3&&!npc.isPig&&!npc.isTrader&&G.unlockedZones.has('hive')){
     if(!G.escort||(!G.escort.active&&!G.escort.done)){
-      // Escort hasn't run this session yet — start it (it will show its own dialog)
       startEscort();
     } else {
-      // Escort already ran or is running — just give directions
       G.pcMsg=`${npc.name}:\n"The HIVE is west of\nhere. Use the portal\non the left wall."`;
       G.pcMsgTimer=220;
     }
@@ -3725,15 +3808,20 @@ function interactWithFacingNPC(){
   return true;
 }
 function openTrainerReward(){
-  if(G.pendingItemReward){
-    G.screen='item_reward';
-    return;
-  }
   if(G.pendingReward){
     G.screen='reward';
     return;
   }
   if(G.battle&&G.battle.trainer) G.battle.trainer.npc.defeated=true;
+  // Check for item rewards (e.g. metal detector from Dune Scout Zara)
+  if(G.battle&&G.battle.trainer&&G.battle.trainer.npc.itemReward==='metalDetector'&&!G.inventory.metalDetector){
+    G.battle.trainer.npc.itemReward=null;
+    G.battlePhase='over';
+    G.battleMsg=G.battle.trainer.name+' was defeated!';
+    // Queue item reward after battle ends
+    G._pendingMetalDetector=true;
+    return;
+  }
   G.battlePhase='over';
   G.battleMsg=(G.battle&&G.battle.trainer?G.battle.trainer.name:'Trainer')+' was defeated!';
 }
@@ -3746,6 +3834,11 @@ function endBattle(){
   G.screen='world';
   checkUnlocks();
   if(beatNpc)autoSave();
+  // Give metal detector after battle screen closes
+  if(G._pendingMetalDetector){
+    G._pendingMetalDetector=false;
+    setTimeout(()=>giveMetalDetector(),100);
+  }
 }
 function checkUnlocks(){
   // Always use prevZone — G.zone is 'battle' during combat
@@ -3888,9 +3981,6 @@ const ALIEN_SHIP_MAP_SIZE = { w: 30, h: 27 };
 function eatMadHoney(){
   if(!(G.inventory.madHoney > 0)) return;
   G.inventory.madHoney--;
-  G.alienReturnZone = G.zone;
-  G.alienReturnX = G.player.x;
-  G.alienReturnY = G.player.y;
   G.alien = {
     active: true,
     phase: 'overlay_in',
@@ -4028,14 +4118,30 @@ function updateAlien(){
       p.visX = p.x; p.visY = p.y;
       sfx && sfx('portal');
       showZoneName('spaceship');
-      G.pcMsg = 'STRANGER:\n"Welcome aboard.\nExplore freely.\nThe stars can wait."';
-      G.pcMsgTimer = 240;
+      G.pcMsg = 'STRANGER:\n"Strap in.\n3... 2... 1..."';
+      G.pcMsgTimer = 200;
     }
     return;
   }
 
   if(al.phase === 'spaceship'){
-    // Explore the ship freely — liftoff/countdown disabled until a future prompt
+    if(G.pcMsgTimer <= 0 && !al.countdownActive){
+      al.countdownActive = true;
+      al.countdownNum = 3;
+      al.countdownTimer = 0;
+    }
+    if(al.countdownActive){
+      al.countdownTimer++;
+      if(al.countdownTimer % 90 === 0 && al.countdownNum > 0){
+        al.countdownNum--;
+        sfx && sfx('buff');
+      }
+      if(al.countdownNum === 0 && al.countdownTimer > 100){
+        al.phase = 'liftoff';
+        al.liftoffTimer = 0;
+        sfx && sfx('encounter');
+      }
+    }
     return;
   }
 
@@ -4192,36 +4298,32 @@ function drawAlienShipSprite(ctx, cx, cy, s){
 // ─── SPACESHIP BIOME ───
 function buildSpaceshipMap(){
   const m = Array.from({length: TALL}, () => new Uint8Array(WIDE));
-  // All solid wall by default
   for(let y=0; y<TALL; y++) for(let x=0; x<WIDE; x++) m[y][x] = 2;
-  // Circular interior — radius ~10 centered at (14,13)
   const cx = 14, cy = 13, r = 10;
   for(let y=0; y<TALL; y++) for(let x=0; x<WIDE; x++){
-    const dist = Math.sqrt((x-cx)**2 + (y-cy)**2);
-    if(dist < r) m[y][x] = 40; // ship floor
+    if(Math.sqrt((x-cx)**2 + (y-cy)**2) < r) m[y][x] = 40;
   }
   // Central control platform
-  for(let y=10; y<=14; y++) for(let x=11; x<=17; x++) m[y][x] = 41; // console floor
-  for(let y=10; y<=11; y++) for(let x=11; x<=17; x++) m[y][x] = 42; // control bank (solid)
-  // Engine pillar
-  m[16][13] = 43; m[16][15] = 43; // engine nodes
+  for(let y=10; y<=14; y++) for(let x=11; x<=17; x++) m[y][x] = 41;
+  for(let y=10; y<=11; y++) for(let x=11; x<=17; x++) m[y][x] = 42;
+  // Engine pillars
+  m[16][13] = 43; m[16][15] = 43;
   // Entry hatch at bottom
   m[22][14] = 44; m[22][13] = 44;
-  // Lab nook — metal table with erlenmeyer flask (east wall)
-  for(let y=13; y<=15; y++) m[y][20] = 41;
-  m[14][20] = 41; m[13][20] = 41;
-  // Meditation chair nook (west wall)
-  for(let y=14; y<=16; y++) m[y][8] = 40;
-  m[15][7] = 40;
-  // Alien puzzle console (south of command deck)
-  m[12][11] = 41; m[12][12] = 41;
-  // Windows — ring of porthole tiles around edge (decorative, walkable)
+  // Porthole ring
   const wAngles = [0, 0.7, 1.4, 2.1, 2.8, 3.5, 4.2, 4.9, 5.6];
   wAngles.forEach(a => {
     const wx = Math.round(cx + Math.cos(a) * (r - 1.5));
     const wy = Math.round(cy + Math.sin(a) * (r - 1.5));
-    if(wx>=0&&wx<WIDE&&wy>=0&&wy<TALL) m[wy][wx] = 45; // porthole tile
+    if(wx>=0&&wx<WIDE&&wy>=0&&wy<TALL) m[wy][wx] = 45;
   });
+  // Brain-wave analyzer chair — left side, tile 46 (chair/solid back), 47 (seat/walkable)
+  m[15][9]  = 46; // chair back (solid)
+  m[16][9]  = 47; // seat (walkable — player stands here)
+  // Erlenmeyer flask on metal table — right side, tile 48 (table solid)
+  m[15][19] = 48;
+  // Sudoku terminal — bottom area, tile 49 (solid terminal)
+  m[20][14] = 49;
   return m;
 }
 
@@ -4352,6 +4454,81 @@ function drawTileSpaceship(tile, sx, sy, tx, ty){
     // Porthole frame
     X.strokeStyle = '#4a6888'; X.lineWidth = 2;
     X.strokeRect(sx+1, sy+1, TW-2, TW-2);
+    return;
+  }
+  if(tile === 46){ // Brain-wave analyzer chair back (solid)
+    X.fillStyle = '#1a1e2a'; X.fillRect(sx, sy, TW, TW);
+    // Chair back frame
+    X.fillStyle = '#384060'; X.fillRect(sx+2, sy+2, TW-4, TW-2);
+    X.fillStyle = '#4a5878'; X.fillRect(sx+3, sy+3, TW-6, TW-4);
+    // Neural interface ring on back
+    const halo = 0.5+0.5*Math.abs(Math.sin(G.tick*0.07));
+    X.fillStyle = `rgba(120,80,255,${halo*0.9})`;
+    X.beginPath(); X.arc(sx+TW/2, sy+TW/2, 6, 0, Math.PI*2); X.fill();
+    X.fillStyle = `rgba(200,160,255,${halo})`;
+    X.beginPath(); X.arc(sx+TW/2, sy+TW/2, 3, 0, Math.PI*2); X.fill();
+    // Wires
+    X.fillStyle = 'rgba(80,60,160,0.7)';
+    X.fillRect(sx+2, sy+TW-4, 3, 4); X.fillRect(sx+TW-5, sy+TW-4, 3, 4);
+    return;
+  }
+  if(tile === 47){ // Chair seat (walkable — player sits here)
+    X.fillStyle = '#202430'; X.fillRect(sx, sy, TW, TW);
+    X.fillStyle = '#2c3450'; X.fillRect(sx+1, sy+2, TW-2, TW-2);
+    X.fillStyle = '#3a4468'; X.fillRect(sx+2, sy+3, TW-4, TW-5);
+    // Cushion
+    X.fillStyle = '#28304a'; X.fillRect(sx+3, sy+4, TW-6, 6);
+    X.fillStyle = 'rgba(80,100,160,0.4)'; X.fillRect(sx+4, sy+5, TW-8, 3);
+    return;
+  }
+  if(tile === 48){ // Erlenmeyer flask on metal table (solid)
+    X.fillStyle = '#101420'; X.fillRect(sx, sy, TW, TW);
+    // Table surface
+    X.fillStyle = '#303848'; X.fillRect(sx, sy+TW-6, TW, 6);
+    X.fillStyle = '#404858'; X.fillRect(sx+1, sy+TW-7, TW-2, 3);
+    // Flask outline — Erlenmeyer shape
+    const pulse = 0.5+0.5*Math.abs(Math.sin(G.tick*0.08));
+    X.fillStyle = 'rgba(80,200,160,0.15)'; X.fillRect(sx+5, sy+2, TW-10, TW-8);
+    // Flask neck
+    X.strokeStyle = 'rgba(120,220,180,0.8)'; X.lineWidth = 1.5;
+    X.strokeRect(sx+8, sy+3, 8, 5);
+    // Flask body (wider triangle-ish)
+    X.beginPath();
+    X.moveTo(sx+8, sy+8); X.lineTo(sx+4, sy+TW-7);
+    X.lineTo(sx+TW-4, sy+TW-7); X.lineTo(sx+TW-8, sy+8);
+    X.closePath(); X.stroke();
+    // Liquid inside
+    X.fillStyle = `rgba(40,255,160,${0.3+pulse*0.3})`;
+    X.fillRect(sx+5, sy+TW-14, TW-10, 7);
+    // Bubbles
+    if(Math.sin(G.tick*0.12+tx)>0.5){ X.fillStyle='rgba(100,255,200,0.8)'; X.fillRect(sx+7,sy+TW-17,2,2); }
+    if(Math.sin(G.tick*0.09+ty)>0.3){ X.fillStyle='rgba(100,255,200,0.8)'; X.fillRect(sx+12,sy+TW-18,2,2); }
+    return;
+  }
+  if(tile === 49){ // Sudoku terminal (solid)
+    X.fillStyle = '#0e1018'; X.fillRect(sx, sy, TW, TW);
+    // Terminal body
+    X.fillStyle = '#1a1e2c'; X.fillRect(sx+1, sy+1, TW-2, TW-2);
+    // Screen
+    const screenGlow = 0.6+0.4*Math.abs(Math.sin(G.tick*0.05));
+    X.fillStyle = `rgba(20,40,80,${screenGlow})`;
+    X.fillRect(sx+3, sy+2, TW-6, TW-8);
+    // Alien grid lines (3x3 sudoku preview)
+    X.strokeStyle = `rgba(60,160,255,${screenGlow*0.8})`; X.lineWidth = 0.5;
+    for(let i=1; i<3; i++){
+      const gx = sx+3 + i*(TW-6)/3;
+      X.beginPath(); X.moveTo(gx, sy+2); X.lineTo(gx, sy+TW-6); X.stroke();
+      const gy = sy+2 + i*(TW-8)/3;
+      X.beginPath(); X.moveTo(sx+3, gy); X.lineTo(sx+TW-3, gy); X.stroke();
+    }
+    // Blinking cursor
+    if(Math.floor(G.tick/20)%2===0){
+      X.fillStyle=`rgba(100,200,255,${screenGlow})`;
+      X.fillRect(sx+TW/2-1, sy+TW/2-1, 2, 2);
+    }
+    // Base/stand
+    X.fillStyle = '#252a38'; X.fillRect(sx+4, sy+TW-5, TW-8, 5);
+    X.fillStyle = '#303848'; X.fillRect(sx+6, sy+TW-3, TW-12, 3);
     return;
   }
   if(tile === 2){ // Ship wall — curved hull plating
@@ -4535,14 +4712,7 @@ function drawSpaceshipWorld(camX, camY){
   }
 
   // Draw alien crew members inside ship
-  if(!G.spaceshipCrewDefeated) drawAlienCrew(camX, camY);
-
-  drawSpaceshipProps(camX, camY);
-
-  // Return-to-Earth electric overlay
-  if(G.screen === 'spaceship_return' || (G.spaceshipReturn && G.spaceshipReturn.phase)){
-    drawSpaceshipReturnFX();
-  }
+  drawAlienCrew(camX, camY);
 
   // Countdown overlay
   const al = G.alien;
@@ -4596,32 +4766,6 @@ function drawAlienCrew(camX, camY){
   });
 }
 
-const SPACESHIP_CHAIR = {tx:8, ty:15};
-const SPACESHIP_FLASK_TABLE = {tx:20, ty:14};
-const SPACESHIP_SUDOKU_CONSOLE = {tx:11, ty:12};
-
-const ALIEN_CREW_TRAINER = {
-  name:'ALIEN CREW',
-  isAlienCrew:true,
-  team:[{id:'radroach',lvl:12},{id:'cyberant',lvl:12},{id:'fruitfly',lvl:13}],
-  intro:'The aliens buzz in unison...\n"Do you wish to fight?"',
-  afterMsg:'Take these Intergalactic\nJumping Beans. They leap\nbetween worlds.',
-  rewardId:null,
-  defeated:false,
-};
-
-function spaceshipFacingTarget(target){
-  const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
-  const[ddx,ddy]=dirs[G.player.dir]||[0,1];
-  const ptx=Math.round(G.player.x/TW), pty=Math.round(G.player.y/TW);
-  return ptx+ddx===target.tx && pty+ddy===target.ty;
-}
-
-function nearAlienCrew(){
-  const ptx=Math.round(G.player.x/TW), pty=Math.round(G.player.y/TW);
-  return ALIEN_CREW_POSITIONS.some(c=>Math.abs(ptx-c.tx)<=1 && Math.abs(pty-c.ty)<=1);
-}
-
 function talkToAlienCrew(crewLabel){
   const lines = {
     'NAV': 'NAVIGATOR:\n"Coordinates locked.\nDestination: the fold\nbetween everything."',
@@ -4632,344 +4776,55 @@ function talkToAlienCrew(crewLabel){
   G.pcMsgTimer = 260;
 }
 
-function drawSpaceshipProps(camX, camY){
-  drawSpaceshipChair(camX, camY);
-  drawSpaceshipFlaskTable(camX, camY);
-  drawSpaceshipSudokuConsole(camX, camY);
-}
-
-function drawSpaceshipChair(camX, camY){
-  const cx=SPACESHIP_CHAIR.tx*TW-camX, cy=SPACESHIP_CHAIR.ty*TW-camY;
-  if(cx<-48||cx>GAME_W+48||cy<-48||cy>GAME_H+48) return;
-  const pulse=0.5+0.5*Math.abs(Math.sin(G.tick*0.09));
-  // Sleek alien chair
-  X.fillStyle='#2a3048'; X.fillRect(cx-10,cy-6,20,14);
-  X.fillStyle='#3a4868'; X.fillRect(cx-8,cy-18,16,14);
-  X.fillStyle='#4a5880'; X.fillRect(cx-6,cy-16,12,10);
-  // Brainwave analyzer headband
-  X.fillStyle=`rgba(80,220,255,${0.5+pulse*0.4})`;
-  X.fillRect(cx-12,cy-28,24,5);
-  X.fillStyle=`rgba(180,255,255,${pulse})`;
-  X.fillRect(cx-10,cy-27,20,3);
-  for(let i=0;i<3;i++){
-    const bx=cx-8+i*8;
-    X.fillStyle=`rgba(0,255,200,${0.4+0.4*Math.sin(G.tick*0.14+i)})`;
-    X.fillRect(bx,cy-32,3,4);
-  }
-  // Electric arcs when returning
-  if(G.screen==='spaceship_return' && G.spaceshipReturn.phase==='electric'){
-    for(let i=0;i<5;i++){
-      const ex=cx-14+((G.tick*7+i*41)%28);
-      const ey=cy-30+((G.tick*5+i*29)%20);
-      X.strokeStyle=`rgba(120,255,255,${0.5+0.5*Math.random()})`;
-      X.lineWidth=2;
-      X.beginPath(); X.moveTo(ex,ey); X.lineTo(ex+6,ey+10); X.lineTo(ex+2,ey+16); X.stroke();
-    }
-  }
-}
-
-function drawSpaceshipFlaskTable(camX, camY){
-  const cx=SPACESHIP_FLASK_TABLE.tx*TW-camX, cy=SPACESHIP_FLASK_TABLE.ty*TW-camY;
-  if(cx<-48||cx>GAME_W+48||cy<-48||cy>GAME_H+48) return;
-  // Metal lab table
-  X.fillStyle='#4a5060'; X.fillRect(cx-14,cy+2,28,8);
-  X.fillStyle='#6a7088'; X.fillRect(cx-12,cy,24,4);
-  X.fillStyle='#8890a8'; X.fillRect(cx-12,cy,24,2);
-  // Erlenmeyer flask
-  const swirl=Math.sin(G.tick*0.06)*0.3+0.7;
-  X.fillStyle='rgba(60,255,120,0.25)'; X.fillRect(cx-8,cy-18,16,16);
-  X.fillStyle='#a8c8d8'; X.beginPath();
-  X.moveTo(cx-4,cy-20); X.lineTo(cx+4,cy-20); X.lineTo(cx+7,cy-6); X.lineTo(cx-7,cy-6); X.closePath(); X.fill();
-  X.fillStyle=`rgba(40,220,100,${swirl})`;
-  X.fillRect(cx-5,cy-10,10,6);
-  X.fillStyle=`rgba(180,255,200,${swirl*0.6})`;
-  X.fillRect(cx-3,cy-14,6,8);
-  X.fillStyle='#c0d0e0'; X.fillRect(cx-2,cy-22,4,4);
-}
-
-function drawSpaceshipSudokuConsole(camX, camY){
-  const cx=SPACESHIP_SUDOKU_CONSOLE.tx*TW-camX, cy=SPACESHIP_SUDOKU_CONSOLE.ty*TW-camY;
-  if(cx<-48||cx>GAME_W+48||cy<-48||cy>GAME_H+48) return;
-  const pulse=0.4+0.3*Math.sin(G.tick*0.1);
-  X.fillStyle='#1a2038'; X.fillRect(cx-12,cy-10,24,18);
-  X.fillStyle='#283858'; X.fillRect(cx-10,cy-8,20,14);
-  // Alien glyph screen
-  for(let r=0;r<3;r++) for(let c=0;c<3;c++){
-    const col=ALIEN_SUDOKU_COLORS[(r*3+c)%9];
-    X.fillStyle=col;
-    X.fillRect(cx-8+c*5,cy-6+r*4,3,3);
-  }
-  X.strokeStyle=`rgba(120,255,220,${pulse})`;
-  X.lineWidth=2; X.strokeRect(cx-11,cy-9,22,16);
-  // Orb antenna
-  X.fillStyle=`rgba(100,255,200,${pulse})`;
-  X.beginPath(); X.arc(cx,cy-14,4,0,Math.PI*2); X.fill();
-}
-
-function healSpaceshipFlask(){
-  const healAll=inst=>{
-    inst.maxHp=levelStats(inst.id,inst.level).hp;
-    inst.hp=inst.maxHp;
-  };
-  G.loadout.forEach(healAll);
-  (G.storage||[]).forEach(healAll);
-  G.battleParty=buildBattleParty();
-  G.pcMsg='A strange liquid...\nsomething compels you\nto toss your bugs in!\n\nAll bugs fully restored!';
-  G.pcMsgTimer=260;
-  sfx('heal');
-}
-
-function startSpaceshipReturn(){
-  G.screen='spaceship_return';
-  G.spaceshipReturn={timer:0, phase:'electric'};
-  G.keys={};
-  sfx('encounter');
-}
-
-function updateSpaceshipReturn(){
-  const sr=G.spaceshipReturn;
-  if(!sr) return;
-  sr.timer++;
-  if(sr.phase==='electric' && sr.timer>90){
-    sr.phase='blackout';
-    sr.timer=0;
-  }
-  if(sr.phase==='blackout' && sr.timer>70){
-    finishSpaceshipReturn();
-  }
-}
-
-function drawSpaceshipReturnFX(){
-  const sr=G.spaceshipReturn||{phase:'electric',timer:0};
-  if(sr.phase==='electric'){
-    const shake=(Math.random()-0.5)*8;
-    X.save();
-    X.translate(shake,shake*0.5);
-    X.globalAlpha=0.35+0.25*Math.random();
-    X.fillStyle='#80ffff';
-    for(let i=0;i<12;i++){
-      X.fillRect((i*47+G.tick*9)%GAME_W,(i*31+G.tick*7)%GAME_H,2,14);
-    }
-    X.restore();
-  } else if(sr.phase==='blackout'){
-    const fade=Math.min(1,sr.timer/50);
-    X.fillStyle=`rgba(0,0,0,${fade})`;
-    X.fillRect(0,0,GAME_W,GAME_H);
-  }
-}
-
-function finishSpaceshipReturn(){
-  const al=G.alien;
-  if(al){ al.active=false; al.phase='done'; al.overlayAlpha=0; }
-  G.zone=G.alienReturnZone!==undefined?G.alienReturnZone:(G.prevZone||1);
-  G.player.x=G.alienReturnX!==undefined?G.alienReturnX:G.player.x;
-  G.player.y=G.alienReturnY!==undefined?G.alienReturnY:G.player.y;
-  G.player.visX=G.player.x; G.player.visY=G.player.y;
-  G.player.dir=2;
-  G.moveDelay=20;
-  G.screen='world';
-  G.spaceshipReturn=null;
-  G.pcMsg='You wake on solid ground.\nThe ship is gone.\nThe sky looks normal again.';
-  G.pcMsgTimer=280;
-  showZoneName(G.zone);
-  sfx('portal');
-  autoSave();
-}
-
-function drawSpaceshipReturnPrompt(){
-  X.fillStyle='#040810'; X.fillRect(0,0,480,432);
-  panel(48,86,384,236,'#e8f0ff');
-  T('BRAINWAVE ANALYZER',240,118,9,'#2040a0','center');
-  T('Wish to return to Earth?',240,162,8,'#304060','center');
-  BTN(94,224,138,42,'YES',()=>{ sfx('menu'); startSpaceshipReturn(); });
-  BTN(248,224,138,42,'NO',()=>{ sfx('menu'); G.screen='world'; });
-}
-
-function drawSpaceshipFightPrompt(){
-  X.fillStyle='#040810'; X.fillRect(0,0,480,432);
-  panel(48,86,384,236,'#e8fff4');
-  T('ALIEN CREW',240,118,9,'#108060','center');
-  T('Do you wish to fight?',240,162,8,'#304060','center');
-  T('(They battle as a trio)',240,186,6,'#607080','center');
-  BTN(94,224,138,42,'YES',()=>{ sfx('encounter'); G.screen='world'; triggerAlienCrewBattle(); });
-  BTN(248,224,138,42,'NO',()=>{ sfx('menu'); G.screen='world'; });
-}
-
-function triggerAlienCrewBattle(){
-  if(G.spaceshipCrewDefeated) return;
-  const npc=ALIEN_CREW_TRAINER;
-  const lead=npc.team[0];
-  G.battle={
-    wild:makeBug(lead.id,{isWild:true,level:lead.lvl}),
-    trainer:{name:npc.name, team:npc.team, idx:0, npc:npc, rewardId:null}
-  };
-  if(!hasBattleReadyBug()){G.battle=null;startWhiteout();return;}
-  G.battleParty=buildBattleParty();
-  if(!G.battleParty.length){G.battle=null;return;}
-  G.battleMsg=`${npc.name}:\n${npc.intro}`;
-  G.battlePhase='trainer-show';
-  G.trainerAnimT=0;
-  G.btFlashP=0; G.btFlashE=0; G.btTick=0; G.swapMode=false;
-  startBattleTransition();
-  sfx('encounter');
-}
-
-function awardAlienCrewBeans(){
-  G.spaceshipCrewDefeated=true;
-  G.inventory.jumpBeans=(G.inventory.jumpBeans||0)+1;
-  G.inventory.jumpBeansSteps=G.inventory.jumpBeansSteps||0;
-  G.pendingItemReward={
-    name:'INTERGALACTIC JUMPING BEANS',
-    desc:'Strange beans that twitch\nwith cosmic energy.\nWalk 1679 steps to hatch\ninto an INTERGALACTIC\nBEAN MOTH.',
-    sprite:'jumpbeans',
-  };
-  G.pendingReward=null;
-}
-
-// ─── ALIEN SUDOKU ───
-const ALIEN_SUDOKU_COLORS=['#ff4466','#44ff88','#4488ff','#ffcc44','#ff44ff','#44ffff','#ff8844','#aa44ff','#88ff44'];
-const ALIEN_SUDOKU_PUZZLE=[
-  [5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],
-  [8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],
-  [0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,9],
-];
-const ALIEN_SUDOKU_SOLUTION=[
-  [5,3,4,6,7,8,9,1,2],[6,7,2,1,9,5,3,4,8],[1,9,8,3,4,2,5,6,7],
-  [8,5,9,7,6,1,4,2,3],[4,2,6,8,5,3,7,9,1],[7,1,3,9,2,4,8,5,6],
-  [9,6,1,5,3,7,2,8,4],[2,8,7,4,1,9,6,3,5],[3,4,5,2,8,6,1,7,9],
-];
-
-function initSudokuState(){
-  const puzzle=ALIEN_SUDOKU_PUZZLE.map(row=>row.slice());
-  const fixed=puzzle.map(row=>row.map(v=>v!==0));
-  G.sudoku={
-    puzzle, solution:ALIEN_SUDOKU_SOLUTION,
-    grid:puzzle.map(row=>row.slice()),
-    fixed, cursor:{r:0,c:0}, solved:!!(G.sudoku&&G.sudoku.solved),
-  };
-}
-
-function openAlienSudoku(){
-  if(!G.sudoku) initSudokuState();
-  else {
-    G.sudoku.puzzle=ALIEN_SUDOKU_PUZZLE.map(r=>r.slice());
-    G.sudoku.solution=ALIEN_SUDOKU_SOLUTION;
-    if(!G.sudoku.grid) G.sudoku.grid=G.sudoku.puzzle.map(r=>r.slice());
-    if(!G.sudoku.fixed) G.sudoku.fixed=G.sudoku.puzzle.map(row=>row.map(v=>v!==0));
-    if(!G.sudoku.cursor) G.sudoku.cursor={r:0,c:0};
-  }
-  G.screen='alien_sudoku';
-  sfx('menu');
-}
-
-function sudokuSetCell(val){
-  const s=G.sudoku; if(!s||s.solved) return;
-  const {r,c}=s.cursor;
-  if(s.fixed[r][c]) return;
-  s.grid[r][c]=val;
-  checkSudokuSolved();
-}
-
-function checkSudokuSolved(){
-  const s=G.sudoku; if(!s) return;
-  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
-    if(s.grid[r][c]===0) return;
-    if(s.grid[r][c]!==s.solution[r][c]) return;
-  }
-  s.solved=true;
-  sfx('win');
-}
-
-function drawAlienSudokuSymbol(ctx,x,y,num,size){
-  const col=ALIEN_SUDOKU_COLORS[num-1]||'#fff';
-  ctx.fillStyle=col;
-  ctx.strokeStyle=col;
-  const s=size;
-  if(num===1){ ctx.beginPath(); ctx.arc(x,y,s*0.35,0,Math.PI*2); ctx.fill(); }
-  else if(num===2){ ctx.beginPath(); ctx.moveTo(x,y-s*0.4); ctx.lineTo(x-s*0.35,y+s*0.35); ctx.lineTo(x+s*0.35,y+s*0.35); ctx.closePath(); ctx.fill(); }
-  else if(num===3){ ctx.fillRect(x-s*0.35,y-s*0.35,s*0.7,s*0.7); }
-  else if(num===4){ ctx.save(); ctx.translate(x,y); ctx.rotate(Math.PI/4); ctx.fillRect(-s*0.28,-s*0.28,s*0.56,s*0.56); ctx.restore(); }
-  else if(num===5){ for(let i=0;i<5;i++){ const a=i*1.26; ctx.fillRect(x+Math.cos(a)*s*0.3-1,y+Math.sin(a)*s*0.3-1,2,2); } }
-  else if(num===6){ ctx.beginPath(); ctx.moveTo(x-s*0.35,y); ctx.lineTo(x,y-s*0.35); ctx.lineTo(x+s*0.35,y); ctx.lineTo(x,y+s*0.35); ctx.closePath(); ctx.fill(); }
-  else if(num===7){ ctx.fillRect(x-s*0.3,y-s*0.15,s*0.6,s*0.3); ctx.fillRect(x-2,y-s*0.35,4,s*0.7); }
-  else if(num===8){ ctx.beginPath(); ctx.arc(x,y-s*0.15,s*0.22,Math.PI,0); ctx.fill(); ctx.fillRect(x-s*0.3,y,s*0.6,s*0.25); }
-  else { ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,s*0.32,0,Math.PI*2); ctx.stroke(); }
-}
-
-function drawAlienSudoku(){
-  const s=G.sudoku;
-  if(!s){ G.screen='world'; return; }
-  X.fillStyle='#060818'; X.fillRect(0,0,480,432);
-  panel(0,0,480,32,'#c8e8ff');
-  T('ALIEN SUDOKU',240,22,9,'#102040','center');
-  const ox=72, oy=44, cs=36;
-  // Board background
-  X.fillStyle='#1a2848'; X.fillRect(ox-4,oy-4,cs*9+8,cs*9+8);
-  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
-    const cx=ox+c*cs, cy=oy+r*cs;
-    const sel=s.cursor.r===r&&s.cursor.c===c;
-    X.fillStyle=sel?'#2a4878':((Math.floor(r/3)+Math.floor(c/3))%2?'#243858':'#1e3048');
-    X.fillRect(cx,cy,cs-1,cs-1);
-    const v=s.grid[r][c];
-    if(v>0){
-      X.globalAlpha=s.fixed[r][c]?1:0.92;
-      drawAlienSudokuSymbol(X,cx+cs/2,cy+cs/2,v,10);
-      X.globalAlpha=1;
-    }
-  }
-  // Bold 3x3 lines
-  X.strokeStyle='#80c0ff'; X.lineWidth=3;
-  for(let i=0;i<=9;i+=3){
-    X.beginPath(); X.moveTo(ox+i*cs,oy); X.lineTo(ox+i*cs,oy+cs*9); X.stroke();
-    X.beginPath(); X.moveTo(ox,oy+i*cs); X.lineTo(ox+cs*9,oy+i*cs); X.stroke();
-  }
-  X.strokeStyle='#4060a0'; X.lineWidth=1;
-  for(let i=0;i<=9;i++){
-    X.beginPath(); X.moveTo(ox+i*cs,oy); X.lineTo(ox+i*cs,oy+cs*9); X.stroke();
-    X.beginPath(); X.moveTo(ox,oy+i*cs); X.lineTo(ox+cs*9,oy+i*cs); X.stroke();
-  }
-  // Symbol key
-  T('Symbols 1-9 — tap cell, then symbol',240,388,5,'#8090b0','center');
-  if(s.solved) T('SOLVED! (More to come...)',240,404,6,'#40ff90','center');
-  // Pick row — number palette
-  const py=400;
-  for(let n=1;n<=9;n++){
-    const px=48+(n-1)*44;
-    BTN(px-14,py-22,32,32,String(n),()=>sudokuSetCell(n),false);
-    drawAlienSudokuSymbol(X,px,py,n,6);
-  }
-  BTN(px+44,py-22,40,32,'CLR',()=>sudokuSetCell(0),false);
-  BTN(12,400,56,26,'EXIT',()=>{ sfx('menu'); G.screen='world'; });
-  // Cell click targets
-  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
-    const cx=ox+c*cs, cy=oy+r*cs;
-    G.buttons.push({x:cx,y:cy,w:cs-1,h:cs-1,label:'sud_cell',action:()=>{ s.cursor={r,c}; }});
-  }
-}
-
 function interactSpaceshipTile(tx, ty){
-  if(G.spaceshipCrewDefeated===false && nearAlienCrew()){
-    G.screen='spaceship_fight_prompt';
-    sfx('menu');
-    return;
-  }
-  if(spaceshipFacingTarget(SPACESHIP_CHAIR)){
-    G.screen='spaceship_return_prompt';
-    sfx('menu');
-    return;
-  }
-  if(spaceshipFacingTarget(SPACESHIP_FLASK_TABLE)){
-    G.pcMsg='A strange liquid...\nsomething compels you\nto throw your bugs in?';
-    G.pcMsgTimer=200;
-    healSpaceshipFlask();
-    return;
-  }
-  if(spaceshipFacingTarget(SPACESHIP_SUDOKU_CONSOLE)){
-    openAlienSudoku();
+  const p = G.player;
+  const ptx = Math.round(p.x/TW), pty = Math.round(p.y/TW);
+
+  // Check alien crew (combatable)
+  const crew = ALIEN_CREW_POSITIONS.find(c => {
+    const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
+    const[dx,dy]=dirs[p.dir]||[0,1];
+    return ptx+dx===c.tx && pty+dy===c.ty;
+  });
+  if(crew){
+    // Ask to fight
+    G.pcMsg = `CREW: "You dare challenge\nthe collective?\nPrepare yourself."\n[Z=Fight  X=Back]`;
+    G.pcMsgTimer = 1;
+    G._alienFightPrompt = true;
+    G._alienFightPromptTimer = 180;
     return;
   }
 
   const tile = gt('spaceship', tx, ty);
+
+  if(tile === 46 || tile === 47){ // Brain-wave analyzer chair
+    G.pcMsg = 'A sleek chair with a\nglowing headset...\nWish to return\nto Earth?';
+    G.pcMsgTimer = 1;
+    G._returnEarthPrompt = true;
+    G._returnEarthTimer = 240;
+    return;
+  }
+
+  if(tile === 48){ // Erlenmeyer flask
+    const allFainted = G.loadout.every(inst=>inst.hp<=0);
+    if(G.loadout.length === 0){
+      G.pcMsg = 'A strange liquid...\nYou have no bugs\nto heal.';
+      G.pcMsgTimer = 200;
+      return;
+    }
+    G.pcMsg = 'A strange liquid...\nSomething compels you\nto throw your bugs in?';
+    G.pcMsgTimer = 1;
+    G._flaskHealPrompt = true;
+    G._flaskHealTimer = 220;
+    return;
+  }
+
+  if(tile === 49){ // Sudoku terminal
+    G.screen = 'alienSudoku';
+    sfx && sfx('portal');
+    return;
+  }
+
   if(tile === 42){
     G.pcMsg = 'CONTROL PANEL:\nThe symbols shift as\nyou approach.\nYou understand nothing.\nAnd everything.';
     G.pcMsgTimer = 240;
@@ -4980,6 +4835,389 @@ function interactSpaceshipTile(tx, ty){
     G.pcMsg = 'ENGINE CORE:\nA deep hum resonates\nin your back teeth.\nThe colour has no name.';
     G.pcMsgTimer = 220;
   }
+}
+
+// ── Alien Trio NPC ──
+const ALIEN_TRIO_NPC = {
+  name: 'ALIEN TRIO',
+  sprite: 'alien',
+  zone: 'spaceship',
+  intro: 'CREW: "You dare challenge\nthe collective?\nPrepare yourself."',
+  afterMsg: 'CREW: "Remarkable.\nYou have earned these."',
+  team: [{id:'radiocockroach',lvl:14},{id:'cyberant',lvl:15},{id:'fruitfly',lvl:14}],
+  rewardId: 'igBean',
+  defeated: false,
+};
+
+function triggerAlienTrioBattle(){
+  if(ALIEN_TRIO_NPC.defeated){
+    G.pcMsg='CREW: "You have proven\nyourself. We remember."';
+    G.pcMsgTimer=200;
+    return;
+  }
+  const lead=ALIEN_TRIO_NPC.team[0];
+  G.battle={
+    wild: makeBug(lead.id, {isWild:true, level:lead.lvl}),
+    trainer: {name:ALIEN_TRIO_NPC.name, team:ALIEN_TRIO_NPC.team, idx:0, npc:ALIEN_TRIO_NPC, rewardId:'igBean'}
+  };
+  if(!hasBattleReadyBug()){G.battle=null;startWhiteout();return;}
+  G.battleParty=buildBattleParty();
+  if(!G.battleParty.length){G.battle=null;return;}
+  G.battleMsg=`${ALIEN_TRIO_NPC.name}:\n${ALIEN_TRIO_NPC.intro}`;
+  G.battlePhase='trainer-show';
+  G.trainerAnimT=0;
+  G.btFlashP=0; G.btFlashE=0; G.btTick=0; G.swapMode=false;
+  BATZ['spaceship']={sky:'#020408',hor:'#101828',gnd:'#1a1e2a',gnd2:'#202840',plat:'#304060'};
+  startBattleTransition();
+  sfx&&sfx('encounter');
+}
+
+function flaskHealParty(){
+  G.loadout.forEach(inst=>{
+    inst.maxHp = levelStats(inst.id, inst.level).hp;
+    inst.hp = inst.maxHp;
+  });
+  G.battleParty = buildBattleParty();
+  sfx && sfx('heal');
+  G.pcMsg = 'Your bugs emerged\nfrom the flask,\nfully healed!\nThey smell faintly\nof star-anise.';
+  G.pcMsgTimer = 260;
+}
+
+function startReturnToEarth(){
+  G._returnToEarth = {timer:0, phase:'electric'};
+  sfx && sfx('levelup');
+}
+
+function drawReturnToEarthAnim(){
+  const rte = G._returnToEarth;
+  if(!rte) return;
+  rte.timer++;
+  const t = rte.timer;
+
+  if(rte.phase === 'electric'){
+    // Electric arcs fill screen, then fade to black
+    const alpha = Math.min(1, t/20);
+    X.fillStyle=`rgba(0,0,0,${alpha*0.7})`;
+    X.fillRect(0,0,GAME_W,GAME_H);
+    // Lightning arcs
+    if(t < 80){
+      const arcCount = 8 + Math.floor(t/5);
+      for(let i=0;i<arcCount;i++){
+        X.strokeStyle=`rgba(${160+Math.random()*95|0},${180+Math.random()*75|0},255,${0.4+Math.random()*0.6})`;
+        X.lineWidth = 0.5+Math.random()*2;
+        X.beginPath();
+        const startX = (i%2===0) ? 0 : GAME_W;
+        const startY = (i*67)%GAME_H;
+        X.moveTo(startX,startY);
+        let cx2=startX, cy2=startY;
+        for(let s=0;s<6;s++){
+          cx2 += (Math.random()-0.5)*80*(i%2===0?1:-1) + (GAME_W/2-cx2)*0.15;
+          cy2 += (Math.random()-0.5)*40 + (GAME_H/2-cy2)*0.1;
+          X.lineTo(cx2,cy2);
+        }
+        X.lineTo(GAME_W/2+(Math.random()-0.5)*30, GAME_H/2+(Math.random()-0.5)*30);
+        X.stroke();
+      }
+      // Center flash
+      if(t%6<3){
+        const flashGrad = X.createRadialGradient(GAME_W/2,GAME_H/2,0,GAME_W/2,GAME_H/2,60);
+        flashGrad.addColorStop(0,'rgba(200,220,255,0.9)');
+        flashGrad.addColorStop(1,'rgba(100,150,255,0)');
+        X.fillStyle=flashGrad; X.fillRect(0,0,GAME_W,GAME_H);
+      }
+    }
+    if(t >= 80){
+      // Fade to black
+      const blackAlpha = Math.min(1,(t-80)/40);
+      X.fillStyle=`rgba(0,0,0,${blackAlpha})`;
+      X.fillRect(0,0,GAME_W,GAME_H);
+      if(t > 120){
+        rte.phase='blackout';
+      }
+    }
+    return;
+  }
+
+  if(rte.phase==='blackout'){
+    X.fillStyle='#000000'; X.fillRect(0,0,GAME_W,GAME_H);
+    rte.timer++;
+    if(rte.timer > 160){
+      // Return to original zone
+      finishReturnToEarth();
+    }
+    return;
+  }
+}
+
+function finishReturnToEarth(){
+  // Clear alien state
+  G._returnToEarth = null;
+  G.alien = null;
+  // Return to prevZone
+  const returnZone = G.prevZone || 1;
+  G.zone = returnZone;
+  resetMap(returnZone);
+  const p = G.player;
+  p.x=14*TW; p.y=14*TW; p.dir=2;
+  p.visX=p.x; p.visY=p.y;
+  G.moveDelay=20;
+  showZoneName(returnZone);
+  G.pcMsg = 'You blink.\nYou are back.\nThe air smells like\ngrass and rain.\nIt was real.';
+  G.pcMsgTimer=300;
+  G.screen='world';
+  sfx && sfx('portal');
+}
+
+// ═══════════════════════════════════════════════
+// WRECKAGE BIOME
+// ═══════════════════════════════════════════════
+// Tile legend:
+//  0  = plain sand floor (no encounter)
+//  50 = encounter sand (half rate)
+//  51 = crashed ship hull (solid)
+//  52 = smoking debris (solid)
+//  53 = rock/dune wall (solid)
+//  2  = border wall
+
+function buildWreckageMap(){
+  const m=Array.from({length:TALL},()=>new Uint8Array(WIDE));
+  // Border
+  for(let x=0;x<WIDE;x++){m[0][x]=2;m[TALL-1][x]=2;}
+  for(let y=0;y<TALL;y++){m[y][0]=2;m[y][WIDE-1]=2;}
+  // Interior — all sand, encounter sand in open areas
+  for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=50;
+  // Some plain-sand dune paths (no encounter)
+  for(let x=3;x<=26;x++) m[13][x]=0;
+  for(let x=3;x<=26;x++) m[18][x]=0;
+  for(let y=3;y<=23;y++) m[y][14]=0;
+  // Crashed ship hull — top-centre area
+  const shipCells=[
+    [3,9],[3,10],[3,11],[3,12],[3,13],[3,14],[3,15],[3,16],[3,17],[3,18],[3,19],[3,20],
+    [4,8],[4,9],[4,20],[4,21],
+    [5,8],[5,9],[5,20],[5,21],
+    [6,7],[6,8],[6,21],[6,22],
+    [7,7],[7,8],[7,21],[7,22],
+    [8,8],[8,9],[8,20],[8,21],
+    // Crumpled centre section
+    [4,13],[4,14],[4,15],[4,16],
+    [5,12],[5,13],[5,16],[5,17],
+    [6,11],[6,12],[6,17],[6,18],
+  ];
+  shipCells.forEach(([y,x])=>{if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=51;});
+  // Smoking debris scattered around crash site
+  const debris=[[9,10],[9,12],[9,16],[9,18],[10,8],[10,11],[10,17],[10,20],[11,9],[11,15],[11,19]];
+  debris.forEach(([y,x])=>{if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=52;});
+  // Dune rocks around edges
+  [[2,2],[2,3],[4,3],[6,3],[2,25],[4,26],[6,26],[20,2],[22,2],[24,2],[20,26],[22,26],[24,26],
+   [14,2],[14,3],[16,2],[16,26],[14,26]].forEach(([y,x])=>{
+    if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=53;
+  });
+  return m;
+}
+
+function drawTileWreckage(tile,sx,sy,tx,ty){
+  if(tile===0||tile===50){ // Sand
+    // Base colour varies slightly by position for dune texture
+    const shade=(Math.sin(tx*0.4+ty*0.3)*0.06+Math.cos(tx*0.7-ty*0.5)*0.04);
+    const r=Math.round(210+shade*30), g2=Math.round(178+shade*20), b=Math.round(100+shade*15);
+    X.fillStyle=`rgb(${r},${g2},${b})`; X.fillRect(sx,sy,TW,TW);
+    // Ripple lines every few tiles
+    if((tx+ty)%3===0){
+      X.fillStyle='rgba(255,230,160,0.25)';
+      X.fillRect(sx+2,sy+4,TW-4,2);
+      X.fillRect(sx+1,sy+10,TW-2,2);
+    }
+    if(tile===50&&(tx*7+ty*13)%9===0){ // occasional pebble
+      X.fillStyle='rgba(140,110,60,0.5)'; X.fillRect(sx+5,sy+6,3,3);
+    }
+    return;
+  }
+  if(tile===51){ // Crashed ship hull
+    X.fillStyle='#304050'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#3a4a5a'; X.fillRect(sx+1,sy+1,TW-2,TW-2);
+    // Scorched dents
+    X.fillStyle='rgba(0,0,0,0.4)'; X.fillRect(sx+2,sy+2,5,4); X.fillRect(sx+9,sy+8,4,3);
+    // Warped metal glint
+    X.fillStyle='rgba(160,180,200,0.3)'; X.fillRect(sx+3,sy+1,8,2);
+    // Smoke wisps
+    const sw=0.3+0.3*Math.sin(G.tick*0.05+tx*0.8+ty*1.1);
+    X.fillStyle=`rgba(80,80,80,${sw})`;
+    X.fillRect(sx+TW/2-1,sy,2,4);
+    return;
+  }
+  if(tile===52){ // Smoking debris
+    X.fillStyle='#c8a050'; X.fillRect(sx,sy,TW,TW); // sand base
+    X.fillStyle='#505868'; X.fillRect(sx+2,sy+4,TW-4,TW-5); // chunk
+    X.fillStyle='#606878'; X.fillRect(sx+3,sy+5,TW-6,TW-8);
+    X.fillStyle='#404850'; X.fillRect(sx+5,sy+3,6,4); // jagged top
+    // Smoke
+    const sp=0.4+0.35*Math.sin(G.tick*0.07+tx*1.3);
+    const sp2=0.3+0.25*Math.sin(G.tick*0.09+ty*0.9+1);
+    X.fillStyle=`rgba(100,100,100,${sp})`; X.fillRect(sx+5,sy-2,3,5);
+    X.fillStyle=`rgba(120,120,120,${sp2})`; X.fillRect(sx+8,sy-4,2,6);
+    return;
+  }
+  if(tile===53){ // Dune rock
+    X.fillStyle='#c8a050'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#a08038'; X.fillRect(sx+1,sy+4,TW-2,TW-4);
+    X.fillStyle='#b89048'; X.fillRect(sx+2,sy+5,TW-4,TW-6);
+    X.fillStyle='rgba(255,220,120,0.25)'; X.fillRect(sx+3,sy+5,6,3);
+    return;
+  }
+  if(tile===2){ // Border wall — sandy rock
+    X.fillStyle='#8a6828'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#7a5818'; X.fillRect(sx+2,sy+2,TW-4,TW-4);
+    X.fillStyle='rgba(255,200,80,0.15)'; X.fillRect(sx,sy,TW,2);
+    return;
+  }
+  // Fallback
+  X.fillStyle='#c8a050'; X.fillRect(sx,sy,TW,TW);
+}
+
+function drawCamelSprite(ctx,cx,cy,s){
+  // Simple pixel camel facing left
+  ctx.save();
+  // Legs
+  ctx.fillStyle='#c09040';
+  ctx.fillRect(Math.round(cx-10*s),Math.round(cy+2*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(12*s)));
+  ctx.fillRect(Math.round(cx-4*s), Math.round(cy+2*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(12*s)));
+  ctx.fillRect(Math.round(cx+2*s), Math.round(cy+2*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(12*s)));
+  ctx.fillRect(Math.round(cx+8*s), Math.round(cy+2*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(12*s)));
+  // Body
+  ctx.fillStyle='#d4a850';
+  ctx.fillRect(Math.round(cx-13*s),Math.round(cy-10*s),Math.max(1,Math.round(26*s)),Math.max(1,Math.round(14*s)));
+  // Hump
+  ctx.fillStyle='#c8a040';
+  ctx.fillRect(Math.round(cx-4*s), Math.round(cy-18*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(10*s)));
+  ctx.fillRect(Math.round(cx-2*s), Math.round(cy-20*s),Math.max(1,Math.round(6*s)), Math.max(1,Math.round(4*s)));
+  // Neck
+  ctx.fillStyle='#d4a850';
+  ctx.fillRect(Math.round(cx-16*s),Math.round(cy-18*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(10*s)));
+  // Head
+  ctx.fillRect(Math.round(cx-22*s),Math.round(cy-22*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(8*s)));
+  // Eye
+  ctx.fillStyle='#3a2008';
+  ctx.fillRect(Math.round(cx-20*s),Math.round(cy-20*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  ctx.restore();
+}
+
+// Draw wreckage world — reuses drawWorld logic but with wreckage tile renderer
+function drawWreckageWorld(camX,camY){
+  // Sandy sky gradient
+  const grad=X.createLinearGradient(0,0,0,GAME_H);
+  grad.addColorStop(0,'#d4905a');
+  grad.addColorStop(0.5,'#e8b870');
+  grad.addColorStop(1,'#c8a050');
+  X.fillStyle=grad; X.fillRect(0,0,GAME_W,GAME_H);
+
+  const map=getMap('wreckage');
+  const startTX=Math.max(0,Math.floor(camX/TW));
+  const endTX=Math.min(WIDE-1,Math.ceil((camX+GAME_W)/TW));
+  const startTY=Math.max(0,Math.floor(camY/TW));
+  const endTY=Math.min(TALL-1,Math.ceil((camY+GAME_H)/TW));
+  for(let ty2=startTY;ty2<=endTY;ty2++)
+    for(let tx2=startTX;tx2<=endTX;tx2++)
+      drawTileWreckage(map[ty2][tx2],tx2*TW-camX,ty2*TW-camY,tx2,ty2);
+
+  // Draw camel near CAMEL MAN JOAD
+  const camelSX=16*TW-camX, camelSY=20*TW-camY;
+  if(camelSX>-60&&camelSX<GAME_W+60) drawCamelSprite(X,camelSX,camelSY,1.4);
+}
+
+// ── Camel man interaction ──
+function talkToCamelMan(npc){
+  const allHealed=G.loadout.every(inst=>inst.hp>=inst.maxHp);
+  if(allHealed){
+    G.pcMsg='CAMEL MAN JOAD:\n"You\'re looking good.\nSo are your bugs.\nSafe travels."';
+    G.pcMsgTimer=200;
+    return;
+  }
+  G.pcMsg='CAMEL MAN JOAD:\n"The camel spat on\nyour bugs. They\'re\nhealed. Don\'t ask."';
+  G.pcMsgTimer=220;
+  G.loadout.forEach(inst=>{inst.maxHp=levelStats(inst.id,inst.level).hp;inst.hp=inst.maxHp;});
+  G.battleParty=buildBattleParty();
+  sfx&&sfx('heal');
+}
+
+// ── Metal detector reward ──
+function giveMetalDetector(){
+  G.inventory.metalDetector=true;
+  G.pendingItemReward={name:'METAL DETECTOR',desc:'Beeps near hidden things.\nMaybe useful someday.'};
+  G.screen='item_reward';
+}
+
+// ── Sudoku win → crash sequence ──
+function startSudokuCrash(){
+  G.screen='sudokuCrash';
+  G._sudokuCrash={timer:0, phase:'dialog'};
+  sfx&&sfx('encounter');
+}
+
+function drawSudokuCrash(){
+  const sc=G._sudokuCrash;
+  if(!sc){G.screen='world';return;}
+  sc.timer++;
+
+  if(sc.phase==='dialog'){
+    // Dark space interior — alien dialog
+    X.fillStyle='#020408'; X.fillRect(0,0,GAME_W,GAME_H);
+    // Stars
+    for(let i=0;i<40;i++){
+      X.fillStyle=`rgba(255,255,255,${0.3+0.3*(i%3)/3})`;
+      X.fillRect((i*137)%480,(i*79)%432,1,1);
+    }
+    // Draw 3 panicked aliens
+    drawAlienSprite(X,140,260,1.0);
+    drawAlienSprite(X,240,240,1.2);
+    drawAlienSprite(X,340,260,1.0);
+    // Dialog box
+    X.fillStyle='rgba(0,0,0,0.7)'; X.fillRect(0,320,480,80);
+    X.fillStyle='#00ffaa';
+    X.fillRect(0,320,480,3);
+    T('ALIEN CREW:',14,340,6,'#80ffb0');
+    T('"What did you do?!?!"',14,356,6,'#ffffff');
+    T('"We\'re crashing back to Earth!"',14,372,6,'#ffffff');
+    if(Math.floor(G.tick/18)%2===0) T('▼',466,394,7,'#80ffb0','right');
+    // Advance after ~200 frames or on tap
+    G.buttons.push({x:0,y:0,w:GAME_W,h:GAME_H,label:'crash_advance',action:()=>{
+      if(sc.phase==='dialog'){ sc.phase='blackout'; sc.timer=0; }
+    }});
+    if(sc.timer>240){ sc.phase='blackout'; sc.timer=0; }
+    return;
+  }
+
+  if(sc.phase==='blackout'){
+    const alpha=Math.min(1,sc.timer/40);
+    X.fillStyle='#000000'; X.fillRect(0,0,GAME_W,GAME_H);
+    // Shake effect early on
+    if(sc.timer<30){
+      const shake=(1-sc.timer/30)*8;
+      X.fillStyle=`rgba(255,80,0,${0.3*(1-sc.timer/30)})`;
+      X.fillRect(Math.random()*shake-shake/2,Math.random()*shake-shake/2,GAME_W,GAME_H);
+    }
+    X.fillStyle=`rgba(0,0,0,${alpha})`; X.fillRect(0,0,GAME_W,GAME_H);
+    if(sc.timer>80){ finishSudokuCrash(); }
+    return;
+  }
+}
+
+function finishSudokuCrash(){
+  G._sudokuCrash=null;
+  G.alien=null;
+  // Warp to wreckage
+  G.zone='wreckage'; resetMap('wreckage');
+  G.prevZone='wreckage';
+  const p=G.player;
+  p.x=14*TW; p.y=15*TW; p.dir=2;
+  p.visX=p.x; p.visY=p.y;
+  G.moveDelay=30;
+  showZoneName('wreckage');
+  if(!G.unlockedZones) G.unlockedZones=new Set();
+  G.unlockedZones.add('wreckage');
+  G.pcMsg='You wake up on sand.\nEverything smells like\nburned metal.\nA man with a camel\nlooks down at you.';
+  G.pcMsgTimer=320;
+  G.screen='world';
+  sfx&&sfx('portal');
 }
 
 // ── Hive shrine interaction ──
@@ -5248,7 +5486,6 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
   if(key==='lakeRake'){drawRakeSprite(ctx,cx,cy,s);ctx.restore();return;}
   if(key==='cocoon'){spCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
   if(key==='silkCocoon'){spSilkCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
-  if(key==='jumpBeans'){drawJumpBeansSprite(ctx,cx,cy,s);ctx.restore();return;}
   if(key==='honey'){
     // Honey jar — squat hexagonal jar, golden fill
     // Jar body
@@ -5307,6 +5544,34 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
     ctx.fillStyle='rgba(255,220,255,0.9)';
     ctx.fillRect(cx-1*s,cy-25*s,1*s,1*s);
     ctx.fillRect(cx+6*s,cy-23*s,1*s,1*s);
+    ctx.restore();return;
+  }
+  if(key==='igBean'){
+    const pulse = 0.6 + 0.4*Math.abs(Math.sin(G.tick*0.1));
+    // Outer electric glow
+    ctx.globalAlpha = 0.3 * pulse;
+    ctx.fillStyle='#40c8ff';
+    ctx.beginPath();ctx.arc(cx,cy-4*s,16*s,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=1;
+    // Bean body — rounded blue-green pod
+    ctx.fillStyle='#1a3a50';ctx.fillRect(cx-8*s,cy-14*s,16*s,20*s);
+    ctx.fillStyle='#1e6080';ctx.fillRect(cx-7*s,cy-13*s,14*s,18*s);
+    ctx.fillStyle='#20a0c0';ctx.fillRect(cx-5*s,cy-11*s,10*s,14*s);
+    // Electric shimmer lines
+    ctx.fillStyle=`rgba(80,220,255,${pulse*0.8})`;
+    ctx.fillRect(cx-4*s,cy-10*s,2*s,12*s);
+    ctx.fillRect(cx+1*s,cy-8*s,2*s,8*s);
+    // Highlight
+    ctx.fillStyle='rgba(180,240,255,0.5)';ctx.fillRect(cx-4*s,cy-11*s,4*s,3*s);
+    // Tip
+    ctx.fillStyle='#0a4060';ctx.fillRect(cx-4*s,cy+6*s,8*s,4*s);
+    // Stem
+    ctx.fillStyle='#1a5030';ctx.fillRect(cx-1*s,cy-15*s,3*s,4*s);
+    // Sparks
+    ctx.fillStyle=`rgba(160,240,255,${pulse})`;
+    ctx.fillRect(cx-10*s,cy-8*s,2*s,2*s);
+    ctx.fillRect(cx+8*s,cy-5*s,2*s,2*s);
+    ctx.fillRect(cx-9*s,cy-2*s,2*s,2*s);
     ctx.restore();return;
   }
   if(key==='wildFruit'){
@@ -5383,8 +5648,7 @@ function drawBag(){
     {key:'wildFruit',      label:'Wild Fruit',        qty:inv.wildFruit||0,      desc:'Fruit shaken loose from Mossy\nWoods trees.',                                   hasIt:(inv.wildFruit||0)>0},
     {key:'cocoon',         label:'Cocoon',            qty:inv.cocoon||0,         desc:`Walk 1000 steps to hatch\ninto a MONARCH.\nSteps: ${inv.cocoonSteps||0}/1000`,   hasIt:(inv.cocoon||0)>0},
     {key:'silkCocoon',     label:'Silk Cocoon',       qty:inv.silkCocoon||0,     desc:`Walk 1000 steps to hatch\ninto a SILK MOTH.\nSteps: ${inv.silkCocoonSteps||0}/1000`,hasIt:(inv.silkCocoon||0)>0},
-    {key:'jumpBeans',      label:'Intergalactic\nJumping Beans', qty:inv.jumpBeans||0, desc:`Walk 1679 steps to hatch\ninto INTERGALACTIC\nBEAN MOTH.\nSteps: ${inv.jumpBeansSteps||0}/1679`, hasIt:(inv.jumpBeans||0)>0},
-    {key:'lakeWeed',       label:'Lake Weed',         qty:inv.lakeWeed||0,       desc:'Clumps of pond weed. Maybe useful.',                                            hasIt:(inv.lakeWeed||0)>0},
+    {key:'igBean',         label:'Intergalactic Bean', qty:inv.igBean||0,         desc:`Walk 1679 steps to hatch\ninto a BEAN MOTH.\nSteps: ${inv.igBeanSteps||0}/1679`,     hasIt:(inv.igBean||0)>0},
     {key:'shinyRock',      label:'Shiny Rock',        qty:inv.shinyRock||0,      desc:'A smooth glittery rock.',                                                       hasIt:(inv.shinyRock||0)>0},
     {key:'scrapMetal',     label:'Scrap Metal',       qty:inv.scrapMetal||0,     desc:'Rusted metal bits from the pond.',                                              hasIt:(inv.scrapMetal||0)>0},
   ].filter(it => it.hasIt);
@@ -5643,7 +5907,6 @@ function drawUnlock(){
   G.unlockMsg.split('\n').forEach((l,i)=>T(l,240,156+i*28,7,'#303848','center'));BTN(168,278,144,38,'EXPLORE →',()=>G.screen='world');
 }
 function drawReward(){
-  // Sparkly background
   X.fillStyle='#0e2030';X.fillRect(0,0,480,432);
   for(let i=0;i<60;i++){
     const tt=G.tick*0.4+i*9;
@@ -5655,30 +5918,49 @@ function drawReward(){
     X.fillRect(x|0,y|0,sz,sz);
   }
   const rid=G.pendingReward;
-  if(!rid){
-    // Safety: shouldn't happen, but bail back
-    G.screen='world';return;
+  if(!rid){ G.screen='world';return; }
+
+  // ── Special item reward (igBean) ──
+  if(rid==='igBean'){
+    panel(20,80,440,280,'#f8f8e8');
+    T('YOU GOT AN ITEM!',240,120,9,'#5020c0','center');
+    X.fillStyle='#5020c0';X.fillRect(60,128,360,3);
+    X.fillStyle='#c4d8ec';X.fillRect(150,140,180,130);
+    X.strokeStyle='#303848';X.lineWidth=3;X.strokeRect(150,140,180,130);
+    drawItemSprite(X,'igBean',240,200,1.1);
+    T('INTERGALACTIC', 240, 294, 8, '#303848', 'center');
+    T('JUMPING BEAN', 240, 310, 8, '#303848', 'center');
+    T('Walk 1679 steps to hatch into', 240, 330, 5, '#506070', 'center');
+    T('a BEAN MOTH.', 240, 342, 5, '#506070', 'center');
+    if(G.battle&&G.battle.trainer) T('Gifted by '+G.battle.trainer.name+'.', 240, 356, 5, '#506070', 'center');
+    BTN(160,366,160,30,'✓  TAKE IT!',()=>{
+      sfx('catch');
+      G.inventory.igBean = (G.inventory.igBean||0)+1;
+      if(G.battle&&G.battle.trainer) G.battle.trainer.npc.defeated=true;
+      ALIEN_TRIO_NPC.defeated=true;
+      G.pendingReward=null;
+      saveBattleHP();
+      G.screen='world';
+      autoSave();
+    });
+    return;
   }
+
+  // ── Standard bug reward ──
   const b=BUGS[rid];
   panel(20,50,440,340,'#f8f8e8');
   T('YOU GOT A BUG!',240,90,9,'#c02828','center');
   X.fillStyle='#c02828';X.fillRect(60,98,360,3);
-  // Big sprite frame
   X.fillStyle='#c4d8ec';X.fillRect(150,114,180,140);
   X.strokeStyle='#303848';X.lineWidth=3;X.strokeRect(150,114,180,140);
   drawBug(X,rid,240,188,4.0);
-  // Bug name
   T(b.name,240,278,10,'#303848','center');
-  // Type badge centered
   drawTypeBadge(218,288,b.type);
-  // Stats line
   const tr=G.battle&&G.battle.trainer;
   const lvl=tr?Math.max(1,(tr.team.find(t=>t.id===rid)||{lvl:1}).lvl):5;
   const ns=levelStats(rid,lvl);
   T('Lv. '+lvl+'   HP '+ns.hp+'   ATK '+ns.atk+'   DEF '+ns.def+'   SPD '+ns.spd, 240, 322, 5, '#506070', 'center');
-  if(tr){
-    T('Gifted by '+tr.name+'.', 240, 340, 5, '#506070', 'center');
-  }
+  if(tr) T('Gifted by '+tr.name+'.', 240, 340, 5, '#506070', 'center');
   T(G.loadout.length<6?'Added to your loadout.':'Sent to the field station aquarium.', 240, 356, 5, '#506070', 'center');
   BTN(160,370,160,30,'✓  NICE!',()=>{
     sfx('catch');
@@ -5692,6 +5974,264 @@ function drawReward(){
     checkUnlocks();
     autoSave();
   });
+}
+
+// ═══════════════════════════════════════════════
+// ALIEN SUDOKU
+// ═══════════════════════════════════════════════
+// 9 alien symbols, each with unique color
+const SUDOKU_COLORS =['#ff4060','#40c0ff','#80ff40','#ffb040','#c060ff','#ff60c0','#40ffb0','#e0e040','#60a0ff'];
+
+// Draw the 9 alien symbols centered at (cx,cy), scaled by s
+// Each symbol is unique pixel-art — no text at all
+function drawSudokuSymbol(ctx, idx, cx, cy, s, col){
+  ctx.save();
+  ctx.fillStyle = col;
+  ctx.strokeStyle = col;
+  const p = (x,y,w,h)=>{
+    ctx.fillRect(Math.round(cx+x*s), Math.round(cy+y*s), Math.max(1,Math.round(w*s)), Math.max(1,Math.round(h*s)));
+  };
+  switch(idx){
+    case 0: // ◈ Diamond with dot
+      p(-1,-5,2,1); p(-2,-4,4,1); p(-3,-3,6,1); p(-4,-2,8,1);
+      p(-4,-1,8,1); p(-4,0,8,1); p(-4,1,8,1);
+      p(-3,2,6,1); p(-2,3,4,1); p(-1,4,2,1);
+      // Inner hole
+      ctx.fillStyle='rgba(0,0,0,0.6)'; p(-2,-2,4,4); ctx.fillStyle=col;
+      // Centre dot
+      p(-1,-1,2,2); break;
+
+    case 1: // ⍢ Eye/oval with pupil
+      p(-3,-2,6,1); p(-4,-1,8,1); p(-4,0,8,1); p(-4,1,8,1); p(-3,2,6,1);
+      // Cutout
+      ctx.fillStyle='rgba(0,0,0,0.6)'; p(-2,-1,4,3); ctx.fillStyle=col;
+      // Pupil
+      p(-1,0,2,1); p(0,-1,1,2); break;
+
+    case 2: // ⌖ Cross-in-circle
+      p(-1,-5,2,10); p(-5,-1,10,2);
+      p(-3,-3,2,2); p(1,-3,2,2); p(-3,1,2,2); p(1,1,2,2); break;
+
+    case 3: // ⟟ Triple horizontal with serifs
+      p(-5,-3,10,2); p(-5,0,10,2); p(-5,3,10,2);
+      p(-5,-3,2,8); p(3,-3,2,8); break;
+
+    case 4: // ⍙ Triangle with inner line
+      for(let i=0;i<6;i++) p(-i,-4+i*1.5,i*2+1,1.5);
+      p(-5,4,10,1.5);
+      p(-1,-1,2,4); break;
+
+    case 5: // ⌗ Hash/grid
+      p(-4,-4,2,9); p(1,-4,2,9);
+      p(-5,-2,11,2); p(-5,2,11,2); break;
+
+    case 6: // ⍟ Star burst (6-point)
+      p(-1,-5,2,10); p(-5,-1,10,2);
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(Math.PI/4);
+      ctx.fillStyle=col;
+      ctx.fillRect(Math.round(-1*s),Math.round(-5*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(10*s)));
+      ctx.fillRect(Math.round(-5*s),Math.round(-1*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(2*s)));
+      ctx.restore(); break;
+
+    case 7: // ⊘ Circle with slash
+      p(-1,-5,2,1); p(-3,-4,2,1); p(1,-4,2,1);
+      p(-4,-3,1,2); p(3,-3,1,2);
+      p(-5,-1,1,2); p(4,-1,1,2);
+      p(-4,1,1,2);  p(3,1,1,2);
+      p(-3,3,2,1);  p(1,3,2,1);
+      p(-1,4,2,1);
+      // Diagonal slash
+      for(let i=-4;i<=4;i++) p(i-1,i-1,2,2); break;
+
+    case 8: // ⌬̈ Up-triangle with two dots
+      for(let i=0;i<6;i++) p(-(5-i),-4+i*1.5,(5-i)*2+1,1.5);
+      p(-4,4,10,1.5);
+      // Two dots above tip
+      p(-3,-6,2,2); p(1,-6,2,2); break;
+  }
+  ctx.restore();
+}
+
+// A solved 9×9 sudoku board (indices 1–9 mapped to symbols 0–8)
+const SUDOKU_SOLVED=[
+  [5,3,4,6,7,8,9,1,2],[6,7,2,1,9,5,3,4,8],[1,9,8,3,4,2,5,6,7],
+  [8,5,9,7,6,1,4,2,3],[4,2,6,8,5,3,7,9,1],[7,1,3,9,2,4,8,5,6],
+  [9,6,1,5,3,7,2,8,4],[2,8,7,4,1,9,6,3,5],[3,4,5,2,8,6,1,7,9],
+];
+// Mask — which cells are given (true = fixed clue)
+const SUDOKU_GIVEN=(()=>{
+  const g=Array.from({length:9},()=>Array(9).fill(false));
+  [[0,0],[0,2],[0,4],[0,6],[0,8],
+   [1,1],[1,3],[1,5],[1,7],[1,8],
+   [2,0],[2,2],[2,4],[2,6],[2,7],
+   [3,0],[3,1],[3,3],[3,5],[3,8],
+   [4,0],[4,2],[4,4],[4,6],[4,8],
+   [5,0],[5,3],[5,5],[5,7],[5,8],
+   [6,1],[6,2],[6,4],[6,6],[6,8],
+   [7,0],[7,1],[7,3],[7,5],[7,7],
+   [8,0],[8,2],[8,4],[8,6],[8,8]]
+  .forEach(([r,c])=>g[r][c]=true);
+  return g;
+})();
+
+function initSudokuIfNeeded(){
+  if(!G.sudoku || G.sudoku._version !== 4){
+    const board=SUDOKU_GIVEN.map((row,r)=>row.map((given,c)=>given?SUDOKU_SOLVED[r][c]:0));
+    G.sudoku={board, sel:[4,4], armed:0, done:false, _version:4};
+  }
+  if(G.sudoku.sel===null) G.sudoku.sel=[4,4];
+  if(G.sudoku.armed===undefined) G.sudoku.armed=0;
+}
+
+function sudokuCheck(){
+  const b=G.sudoku.board;
+  for(let r=0;r<9;r++) for(let c=0;c<9;c++) if(b[r][c]!==SUDOKU_SOLVED[r][c]) return false;
+  return true;
+}
+
+// D-pad nav for sudoku — called from key handler each frame
+function updateSudokuInput(){
+  const sd=G.sudoku;
+  if(!sd||G.screen!=='alienSudoku') return;
+
+  const now=G.tick;
+  const REPEAT_DELAY=12, FIRST_DELAY=18;
+  function moved(dir){
+    const last=sd._lastDir;
+    const since=now-(sd._dirSince||0);
+    if(last!==dir){ sd._lastDir=dir; sd._dirSince=now; return true; }
+    return since>=FIRST_DELAY && (since-FIRST_DELAY)%REPEAT_DELAY===0;
+  }
+
+  const up   =G.keys['ArrowUp']   ||G.keys['w']||G.keys['W'];
+  const down =G.keys['ArrowDown'] ||G.keys['s']||G.keys['S'];
+  const left =G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A'];
+  const right=G.keys['ArrowRight']||G.keys['d']||G.keys['D'];
+
+  if(!up&&!down&&!left&&!right) { sd._lastDir=null; return; }
+
+  let [r,c]=sd.sel||[4,4];
+  const nr=r, nc=c;
+  let tr=r, tc=c;
+  if(up    && moved('u')) tr=Math.max(0,r-1);
+  if(down  && moved('d')) tr=Math.min(8,r+1);
+  if(left  && moved('l')) tc=Math.max(0,c-1);
+  if(right && moved('r')) tc=Math.min(8,c+1);
+  // Only land on non-given cells
+  if(!SUDOKU_GIVEN[tr][tc]) sd.sel=[tr,tc];
+  else sd.sel=[tr,tc]; // still move cursor there, just don't allow placing
+}
+
+function drawAlienSudoku(){
+  initSudokuIfNeeded();
+  updateSudokuInput();
+  const sd=G.sudoku;
+
+  // Background
+  X.fillStyle='#020408'; X.fillRect(0,0,480,432);
+  for(let i=0;i<50;i++){
+    const sx2=(i*137)%480, sy2=(i*79+G.tick*0.1|0)%432;
+    X.fillStyle=`rgba(255,255,255,${0.3+0.4*(i%3)/3})`; X.fillRect(sx2,sy2,1,1);
+  }
+
+  const CELL=36, GOFF_X=78, GOFF_Y=8;
+
+  // Box backgrounds
+  for(let bx=0;bx<3;bx++) for(let by=0;by<3;by++){
+    X.fillStyle=(bx+by)%2===0?'rgba(20,40,80,0.7)':'rgba(10,20,50,0.7)';
+    X.fillRect(GOFF_X+bx*CELL*3, GOFF_Y+by*CELL*3, CELL*3, CELL*3);
+  }
+
+  // Cells
+  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
+    const cx2=GOFF_X+c*CELL, cy2=GOFF_Y+r*CELL;
+    const val=sd.board[r][c];
+    const given=SUDOKU_GIVEN[r][c];
+    const selected=sd.sel&&sd.sel[0]===r&&sd.sel[1]===c;
+    const col=val>0?SUDOKU_COLORS[val-1]:null;
+
+    // Colored background only for player-placed cells (not given/clue cells)
+    if(val>0 && !given){
+      X.fillStyle=`rgba(${hexToRgb(col)},0.32)`;
+      X.fillRect(cx2+1,cy2+1,CELL-2,CELL-2);
+    }
+
+    // Selection highlight — only the one selected non-given cell
+    if(selected&&!given){
+      X.fillStyle='rgba(200,220,255,0.22)';
+      X.fillRect(cx2+1,cy2+1,CELL-2,CELL-2);
+      X.strokeStyle='rgba(180,220,255,0.9)'; X.lineWidth=2;
+      X.strokeRect(cx2+2,cy2+2,CELL-4,CELL-4);
+    }
+
+    // Symbol
+    if(val>0){
+      drawSudokuSymbol(X, val-1, cx2+CELL/2, cy2+CELL/2, given?0.95:0.90, col);
+    }
+
+    // Cell click → select only non-given cells
+    G.buttons.push({x:cx2,y:cy2,w:CELL,h:CELL,label:'sc_'+r+'_'+c,action:()=>{
+      if(!given) sd.sel=[r,c];
+    }});
+  }
+
+  // Grid lines
+  for(let i=0;i<=9;i++){
+    const thick=i%3===0;
+    X.strokeStyle=thick?'rgba(80,160,255,0.9)':'rgba(40,80,160,0.5)';
+    X.lineWidth=thick?2:0.75;
+    X.beginPath(); X.moveTo(GOFF_X+i*CELL,GOFF_Y); X.lineTo(GOFF_X+i*CELL,GOFF_Y+9*CELL); X.stroke();
+    X.beginPath(); X.moveTo(GOFF_X,GOFF_Y+i*CELL); X.lineTo(GOFF_X+9*CELL,GOFF_Y+i*CELL); X.stroke();
+  }
+
+  // ── Symbol palette ──
+  const PAL_Y=372, PAL_W=38, PAL_H=32, PAL_GAP=4;
+  const PAL_TOTAL=9*(PAL_W+PAL_GAP)-PAL_GAP;
+  const PAL_X=(480-PAL_TOTAL)/2;
+  for(let i=0;i<9;i++){
+    const px=PAL_X+i*(PAL_W+PAL_GAP);
+    const isArmed=sd.armed===i;
+    const col=SUDOKU_COLORS[i];
+    // Background — all tiles get a colored fill; armed tile is brighter
+    X.fillStyle=isArmed?`rgba(${hexToRgb(col)},0.55)`:`rgba(${hexToRgb(col)},0.22)`;
+    X.fillRect(px,PAL_Y,PAL_W,PAL_H);
+    // Border — full color always, thicker when armed
+    X.strokeStyle=col;
+    X.lineWidth=isArmed?2.5:1.5;
+    X.strokeRect(px,PAL_Y,PAL_W,PAL_H);
+    // Symbol — full color always
+    drawSudokuSymbol(X, i, px+PAL_W/2, PAL_Y+PAL_H/2, isArmed?0.88:0.78, col);
+
+    const captured_i=i;
+    G.buttons.push({x:px,y:PAL_Y,w:PAL_W,h:PAL_H,label:'sp_'+i,action:()=>{
+      sd.armed=captured_i;
+      // Also place in selected cell if one is selected
+      if(sd.sel&&!SUDOKU_GIVEN[sd.sel[0]][sd.sel[1]]){
+        const[r,c]=sd.sel;
+        sd.board[r][c]=(sd.board[r][c]===captured_i+1)?0:captured_i+1;
+        if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
+      }
+    }});
+  }
+
+  // Mobile controls legend
+  const legendY=408;
+  T('D-PAD: move  A/Z: place  B: clear  ↓: next symbol',240,legendY,4,'#4080a0','center');
+
+  // CLR button (keyboard shortcut visual)
+  if(sd.sel&&!SUDOKU_GIVEN[sd.sel[0]][sd.sel[1]]){
+    BTN(4,PAL_Y,52,PAL_H,'CLR',()=>{
+      const[r,c]=sd.sel; sd.board[r][c]=0;
+    });
+  }
+
+  BTN(4,4,80,22,'← EXIT',()=>{ G.screen='world'; sfx&&sfx('menu'); });
+  X.textAlign='left';
+}
+
+function hexToRgb(hex){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return `${r},${g},${b}`;
 }
 
 // ═══════════════════════════════════════════════
@@ -5725,13 +6265,11 @@ function loop(){
     case 'bug_holder': drawBugHolder();break;
     case 'unlock':  drawUnlock(); break;
     case 'reward':  drawReward(); break;
+    case 'alienSudoku': drawAlienSudoku(); break;
+    case 'sudokuCrash': drawSudokuCrash(); break;
     case 'gear':    drawGear();   break;
     case 'bag':     drawBag();    break;
     case 'hatch':   drawHatch();  break;
-    case 'spaceship_return': drawWorld(); break;
-    case 'spaceship_return_prompt': drawSpaceshipReturnPrompt(); break;
-    case 'spaceship_fight_prompt': drawSpaceshipFightPrompt(); break;
-    case 'alien_sudoku': drawAlienSudoku(); break;
     case 'editor':       drawEditor();      break;
     case 'editor_warp':  drawEditorWarp();  break;
   }
@@ -5780,18 +6318,6 @@ document.addEventListener('keydown',e=>{
     }
   }
   if((e.key==='z'||e.key==='Z')&&G.screen==='world') doZAction();
-  if(G.screen==='alien_sudoku'){
-    const s=G.sudoku;
-    if(s){
-      if(e.key==='ArrowUp'||e.key==='w'){s.cursor.r=Math.max(0,s.cursor.r-1);e.preventDefault();}
-      if(e.key==='ArrowDown'||e.key==='s'){s.cursor.r=Math.min(8,s.cursor.r+1);e.preventDefault();}
-      if(e.key==='ArrowLeft'||e.key==='a'){s.cursor.c=Math.max(0,s.cursor.c-1);e.preventDefault();}
-      if(e.key==='ArrowRight'||e.key==='d'){s.cursor.c=Math.min(8,s.cursor.c+1);e.preventDefault();}
-      if(e.key>='1'&&e.key<='9') sudokuSetCell(parseInt(e.key,10));
-      if(e.key==='0'||e.key==='Backspace'||e.key==='Delete') sudokuSetCell(0);
-      if(e.key==='Escape'||e.key==='b'||e.key==='B'){G.screen='world';sfx('menu');}
-    }
-  }
   if(G.screen==='naming'){
     if(e.key==='Backspace')G.nameStr=G.nameStr.slice(0,-1);
     else if(e.key==='Enter')confirmName();
@@ -5828,6 +6354,7 @@ C.addEventListener('mousedown',e=>{
 });
 window.addEventListener('mouseup',()=>{G.activeSlider=null;});
 C.addEventListener('click',e=>{
+  if(G._suppressClick){ G._suppressClick=false; return; }
   const{x,y}=canvasPos(e);
   const sl=(G.sliders||[]).find(s=>x>=s.x&&x<=s.x+s.w&&y>=s.y&&y<=s.y+s.h);
   if(sl){sl.action(Math.max(0,Math.min(1,(x-sl.x)/sl.w)));return;}
@@ -5848,7 +6375,7 @@ C.addEventListener('touchstart',e=>{
     return;
   }
   const h=G.buttons.find(b=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h);
-  if(h&&h.action)h.action();
+  if(h&&h.action){ G._suppressClick=true; h.action(); }
 },{passive:false});
 C.addEventListener('touchmove',e=>{
   e.preventDefault();
@@ -5923,6 +6450,16 @@ function setupBtn(id,fn){
   el.addEventListener('click',fn);
 }
 setupBtn('btn-a',()=>{
+  if(G.screen==='alienSudoku'){
+    const sd=G.sudoku; if(!sd||!sd.sel) return;
+    const[r,c]=sd.sel;
+    if(!SUDOKU_GIVEN[r][c]){
+      const newVal=(sd.board[r][c]===sd.armed+1)?0:sd.armed+1;
+      sd.board[r][c]=newVal;
+      if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
+    }
+    return;
+  }
   // Dismiss any popup message first
   if(G.screen==='dream_runner'){dreamJump();return;}
   if(G.screen==='world'&&G.pcMsgTimer>0){G.pcMsgTimer=0;return;}
@@ -5939,16 +6476,31 @@ setupBtn('btn-a',()=>{
   }
   if(G.screen==='unlock'){G.screen='world';return;}
   if(G.screen==='item_reward'){G.screen='world';G.pendingItemReward=null;return;}
-  if(G.screen==='spaceship_return_prompt'||G.screen==='spaceship_fight_prompt'){G.screen='world';return;}
-  if(G.screen==='alien_sudoku'){G.screen='world';sfx('menu');return;}
   if(G.screen==='world'){
     doZAction(false);
   }
 });
 setupBtn('btn-z',()=>{
+  if(G.screen==='alienSudoku'){
+    const sd=G.sudoku; if(!sd||!sd.sel) return;
+    const[r,c]=sd.sel;
+    if(!SUDOKU_GIVEN[r][c]){
+      const newVal=(sd.board[r][c]===sd.armed+1)?0:sd.armed+1;
+      sd.board[r][c]=newVal;
+      if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
+    }
+    return;
+  }
   if(G.screen==='world') doZAction();
 });
 setupBtn('btn-b',()=>{
+  if(G.screen==='alienSudoku'){
+    const sd=G.sudoku; if(!sd) return;
+    if(sd.sel&&!SUDOKU_GIVEN[sd.sel[0]][sd.sel[1]]){
+      sd.board[sd.sel[0]][sd.sel[1]]=0; // clear cell
+    }
+    return;
+  }
   if(G.screen==='battle'&&G.battlePhase==='move')G.battlePhase='action';
   if(G.screen==='battle'&&G.swapMode)G.swapMode=false;
   if(G.screen==='bugdex'||G.screen==='loadout'||G.screen==='bag')G.screen='menu';
@@ -5981,6 +6533,12 @@ setupBtn('btn-menu',()=>{
   else if(G.screen==='menu')G.screen='world';
 });
 setupBtn('btn-start',()=>{
+  if(G.screen==='alienSudoku'){
+    const sd=G.sudoku; if(!sd) return;
+    sd.armed=(sd.armed+1)%9;
+    sfx&&sfx('menu');
+    return;
+  }
   if(G.screen==='title'){G.screen='intro';G.introIdx=0;G.introCharIdx=0;G.introTimer=0;G.introPhase=0;}
 });
 </script>
@@ -6347,8 +6905,8 @@ function drawItemReward(){
   T('ITEM ACQUIRED!',240,90,9,'#c02828','center');
   X.fillStyle='#c02828';X.fillRect(76,96,328,3);
 
-  if(r.sprite==='jumpbeans') drawJumpBeansSprite(X,240,190,3);
-  else drawRakeSprite(X,240,190,3);
+  // Draw rake sprite
+  drawRakeSprite(X,240,190,3);
 
   T(r.name,240,240,8,'#303848','center');
   r.desc.split('\n').forEach((l,i)=>T(l,240,264+i*18,6,'#607080','center'));
@@ -6358,19 +6916,6 @@ function drawItemReward(){
   else
     G.buttons.push({x:180,y:330,w:120,h:28,label:'item_ok',action:finishItemReward});
   T('press A to continue',240,370,5,'#909898','center');
-}
-
-function drawJumpBeansSprite(ctx,cx,cy,s){
-  const pulse=0.7+0.3*Math.abs(Math.sin(G.tick*0.12));
-  for(let i=0;i<3;i++){
-    const bx=cx-10+i*10, by=cy-4+Math.sin(G.tick*0.15+i)*2;
-    ctx.fillStyle=i===0?'#40c060':(i===1?'#60e080':'#80ffa0');
-    ctx.beginPath(); ctx.ellipse(bx,by,5*s,7*s,0,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=`rgba(120,255,180,${pulse})`;
-    ctx.fillRect(bx-2,by-8,4,3);
-  }
-  ctx.fillStyle=`rgba(80,220,255,${pulse*0.5})`;
-  ctx.beginPath(); ctx.arc(cx,cy-14,10*s,0,Math.PI*2); ctx.fill();
 }
 
 function drawRakeSprite(ctx,cx,cy,s){
@@ -6925,6 +7470,22 @@ const NPCS = [
     isQueen:true, defeated:false,
     intro:'',  // handled by interactHiveShrine
     afterMsg:''},
+  // ── The Wreckage ──
+  {zone:'wreckage', tx:8, ty:14, dir:1, sprite:'hiker', name:'SAND WANDERER RAX',
+    intro:"What in the— did a\nSPACESHIP just crash?!\nI've been out here\ntoo long...",
+    afterMsg:"Still can't believe\nwhat I saw. Take\nmy Antlion.",
+    team:[{id:'velvetant',lvl:12},{id:'antlion',lvl:14},{id:'desertant',lvl:13}],
+    rewardId:'antlion', defeated:false},
+  {zone:'wreckage', tx:21, ty:10, dir:3, sprite:'scout', name:'DUNE SCOUT ZARA',
+    intro:"A CRASH LANDING?!\nRight here in my\npatrol zone?! Unreal.",
+    afterMsg:"You fight well.\nTake my detector.",
+    team:[{id:'dlocust',lvl:13},{id:'antlion',lvl:15},{id:'darkbeetle',lvl:14}],
+    rewardId:null, defeated:false, itemReward:'metalDetector'},
+  {zone:'wreckage', tx:15, ty:20, dir:0, sprite:'hiker', name:'CAMEL MAN JOAD',
+    isCamelMan:true, defeated:false,
+    intro:"Easy now... you took\na bad fall. Your bugs\nare patched up.\nRest here a while.",
+    afterMsg:"You need anything,\nI'm right here.\nMe and the camel.",
+    team:[], rewardId:null},
 ];
 function getNPCAt(zone, tx, ty){
   return NPCS.find(n => n.zone===zone && n.tx===tx && n.ty===ty);
@@ -7814,10 +8375,6 @@ Object.assign(BUGS, {
   diver:    {name:'DIVING BEETLE', type:'AQUATIC', hp:52,atk:16,def:14,spd:12,zone:2, trainerOnly:true, moves:['Plunge','Submarine','Surf Slash','Pincer']},
   mayfly:   {name:'MAYFLY',        type:'FLYING',  hp:34,atk:17,def:7, spd:22,zone:3, trainerOnly:true, moves:['Ephemeral','Gust','Flash Burst','Dart']},
   pillbug:  {name:'PILLBUG',       type:'BEETLE',  hp:60,atk:12,def:18,spd:8, zone:3, trainerOnly:true, moves:['Roll Up','Armour Up','Bash','Guard']},
-  radroach: {name:'RADIOACTIVE COCKROACH',type:'BEETLE',hp:58,atk:22,def:14,spd:14,zone:'spaceship',trainerOnly:true,moves:['Rot Crush','Decay Spray','Raptor Slash','Bite']},
-  cyberant: {name:'CYBER ANT',     type:'BEETLE',  hp:50,atk:20,def:18,spd:16,zone:'spaceship',trainerOnly:true,moves:['Iron Carapace','Raptor Slash','Quick Dart','Lunge']},
-  fruitfly: {name:'FRUIT FLY',     type:'FLYING',  hp:38,atk:18,def:9, spd:24,zone:'spaceship',trainerOnly:true,moves:['Buzz Dive','Dart','Flash Burst','Gust']},
-  beanmoth: {name:'INTERGALACTIC BEAN MOTH',type:'FLYING',hp:52,atk:18,def:11,spd:22,zone:'spaceship',fruitOnly:true,moves:['Wing Gale','Flash Burst','Sky Cutter','Migration Rush']},
 });
 Object.assign(MOVES, {
   'Stink Cloud':{p:0,a:1,e:'espd-',t:'MOLD'},
@@ -8025,96 +8582,12 @@ function spPillbug(c,cx,cy,s,f){
   c.restore();
 }
 
-// ─── RADIOACTIVE COCKROACH ───
-function spRadroach(c,cx,cy,s,f){
-  c.save();
-  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
-  const o=cx-12*s,t=cy-10*s;
-  const glow=0.5+0.5*Math.abs(Math.sin(G.tick*0.1));
-  PX(c,o,t,2,4,20,12,'#2a4020',s);
-  PX(c,o,t,4,5,16,10,'#3a5828',s);
-  PX(c,o,t,6,6,12,8,'#4a6830',s);
-  PX(c,o,t,8,5,2,2,'#c81810',s);
-  PX(c,o,t,14,5,2,2,'#c81810',s);
-  PX(c,o,t,1,8,4,3,'#2a4020',s);
-  PX(c,o,t,19,8,4,3,'#2a4020',s);
-  c.fillStyle=`rgba(80,255,60,${glow})`;
-  c.fillRect(o+4*s,t+2*s,16*s,4*s);
-  c.fillStyle=`rgba(180,255,80,${glow*0.5})`;
-  c.beginPath();c.arc(o+10*s,t+8*s,8*s,0,Math.PI*2);c.fill();
-  c.restore();
-}
-
-// ─── CYBER ANT (half ant, half robot) ───
-function spCyberant(c,cx,cy,s,f){
-  c.save();
-  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
-  const o=cx-12*s,t=cy-12*s;
-  PX(c,o,t,4,6,8,10,'#3a2818',s);
-  PX(c,o,t,12,6,8,10,'#607088',s);
-  PX(c,o,t,5,7,6,8,'#5a4028',s);
-  PX(c,o,t,13,7,6,8,'#8098b0',s);
-  PX(c,o,t,6,4,4,4,'#2a1810',s);
-  PX(c,o,t,14,4,4,4,'#304858',s);
-  PX(c,o,t,7,2,2,2,'#c81810',s);
-  PX(c,o,t,15,2,2,2,'#40c0ff',s);
-  PX(c,o,t,1,10,3,4,'#3a2818',s);
-  PX(c,o,t,18,10,3,4,'#506878',s);
-  const pulse=0.6+0.4*Math.sin(G.tick*0.12);
-  c.fillStyle=`rgba(64,200,255,${pulse})`;
-  c.fillRect(o+14*s,t+4*s,4*s,2*s);
-  c.fillRect(o+15*s,t+10*s,3*s,2*s);
-  c.restore();
-}
-
-// ─── FRUIT FLY (alien crew) ───
-function spAlienFruitfly(c,cx,cy,s,f){
-  c.save();
-  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
-  const o=cx-8*s,t=cy-10*s;
-  c.fillStyle='rgba(255,180,80,0.45)';
-  c.fillRect(o-4*s,t,t+4*s,12*s);
-  c.fillRect(o+12*s,t,t+4*s,12*s);
-  PX(c,o,t,6,8,4,6,'#c06020',s);
-  PX(c,o,t,5,6,6,4,'#e08030',s);
-  PX(c,o,t,7,4,2,2,'#1a1010',s);
-  PX(c,o,t,9,4,2,2,'#1a1010',s);
-  PX(c,o,t,6,2,4,2,'#802010',s);
-  c.restore();
-}
-
-// ─── INTERGALACTIC BEAN MOTH ───
-function spBeanmoth(c,cx,cy,s,f){
-  c.save();
-  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
-  const o=cx-14*s,t=cy-12*s;
-  const pulse=0.5+0.5*Math.abs(Math.sin(G.tick*0.08));
-  c.fillStyle=`rgba(80,180,255,${0.35+pulse*0.35})`;
-  c.fillRect(o-6*s,t+2*s,10*s,14*s);
-  c.fillRect(o+18*s,t+2*s,10*s,14*s);
-  PX(c,o,t,6,6,16,10,'#4080c0',s);
-  PX(c,o,t,8,8,12,8,'#60a8e8',s);
-  PX(c,o,t,10,4,8,6,'#204060',s);
-  PX(c,o,t,11,5,2,2,'#a0e8ff',s);
-  PX(c,o,t,13,5,2,2,'#a0e8ff',s);
-  c.strokeStyle=`rgba(120,255,255,${pulse})`;
-  c.lineWidth=2;
-  c.beginPath();c.moveTo(o+14*s,t+10*s);c.lineTo(o+14*s,t+18*s);c.stroke();
-  c.fillStyle=`rgba(180,240,255,${pulse})`;
-  c.beginPath();c.arc(o+14*s,t+20*s,3*s,0,Math.PI*2);c.fill();
-  c.restore();
-}
-
 SFN.stinkbug = spStinkbug;
 SFN.worm = spWorm;
 SFN.boatman = spBoatman;
 SFN.diver = spDiver;
 SFN.mayfly = spMayfly;
 SFN.pillbug = spPillbug;
-SFN.radroach = spRadroach;
-SFN.cyberant = spCyberant;
-SFN.fruitfly = spAlienFruitfly;
-SFN.beanmoth = spBeanmoth;
 
 // ─── SILK COCOON ───
 function spSilkCocoon(c,cx,cy,s,f){
@@ -8354,10 +8827,263 @@ SFN.hornet=spHornet;
 SFN.honeybee=spHoneybee;
 SFN.queenbee=spQueenbee;
 
-// ═══════════════════════════════════════════════
-// DRAW TRAINER AT BATTLE SCALE
-// ═══════════════════════════════════════════════
+SFN.yellowjacket=spYellowjacket;
+SFN.hornet=spHornet;
+SFN.honeybee=spHoneybee;
+SFN.queenbee=spQueenbee;
+
+// ─── RADIOACTIVE COCKROACH ───
+function spRadiocockroach(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-11*s,t=cy-11*s;
+  const glow=0.5+0.5*Math.abs(Math.sin(G.tick*0.09));
+  // Radioactive aura
+  c.globalAlpha=glow*0.4;c.fillStyle='#80ff20';c.beginPath();c.arc(cx,cy-2*s,18*s,0,Math.PI*2);c.fill();c.globalAlpha=1;
+  // Legs (6)
+  PX(c,o,t,-2,10,5,1,'#1a2810',s);PX(c,o,t,-2,14,5,1,'#1a2810',s);PX(c,o,t,-2,18,5,1,'#1a2810',s);
+  PX(c,o,t,19,10,5,1,'#1a2810',s);PX(c,o,t,19,14,5,1,'#1a2810',s);PX(c,o,t,19,18,5,1,'#1a2810',s);
+  // Body — dark brown-green with neon highlights
+  PX(c,o,t,2,7,18,16,'#2a3010',s);PX(c,o,t,3,6,16,18,'#3a4018',s);PX(c,o,t,4,7,14,15,'#1e3c08',s);
+  // Carapace glow patches
+  c.fillStyle=`rgba(80,255,20,${glow*0.6})`;
+  c.fillRect(Math.round(o+5*s),Math.round(t+8*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+  c.fillRect(Math.round(o+13*s),Math.round(t+11*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+  c.fillRect(Math.round(o+8*s),Math.round(t+16*s),Math.max(1,Math.round(4*s)),Math.max(1,Math.round(2*s)));
+  // Head
+  PX(c,o,t,5,2,12,5,'#2a3010',s);PX(c,o,t,6,1,10,4,'#3a4018',s);
+  // Antennae
+  PX(c,o,t,6,-4,1,6,'#1a2810',s);PX(c,o,t,15,-4,1,6,'#1a2810',s);
+  PX(c,o,t,5,-5,2,1,'#1a2810',s);PX(c,o,t,15,-5,2,1,'#1a2810',s);
+  // Eyes — glowing green
+  c.fillStyle=`rgba(80,255,20,${glow})`;
+  c.fillRect(Math.round(o+6*s),Math.round(t+2*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+  c.fillRect(Math.round(o+13*s),Math.round(t+2*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+  c.restore();
+}
+
+// ─── CYBER ANT ───
+function spCyberant(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-10*s,t=cy-14*s;
+  const pulse=0.6+0.4*Math.abs(Math.sin(G.tick*0.11));
+  // Circuit glow
+  c.globalAlpha=pulse*0.3;c.fillStyle='#40c8ff';c.beginPath();c.arc(cx,cy-4*s,16*s,0,Math.PI*2);c.fill();c.globalAlpha=1;
+  // Legs — metallic
+  PX(c,o,t,-3,12,5,1,'#607080',s);PX(c,o,t,-3,17,5,1,'#607080',s);PX(c,o,t,-2,22,5,1,'#607080',s);
+  PX(c,o,t,18,12,5,1,'#607080',s);PX(c,o,t,18,17,5,1,'#607080',s);PX(c,o,t,17,22,5,1,'#607080',s);
+  // Gaster (rear) — metallic orb
+  PX(c,o,t,3,22,14,10,'#404858',s);PX(c,o,t,4,21,12,12,'#505868',s);PX(c,o,t,6,22,8,10,'#6070a0',s);
+  // Circuit lines on gaster
+  c.fillStyle=`rgba(60,200,255,${pulse*0.8})`;
+  c.fillRect(Math.round(o+5*s),Math.round(t+24*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(1*s)));
+  c.fillRect(Math.round(o+7*s),Math.round(t+26*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(1*s)));
+  // Petiole (waist)
+  PX(c,o,t,8,18,4,5,'#303848',s);
+  // Thorax — half-organic, half-metal plating
+  PX(c,o,t,3,10,14,9,'#1e2010',s);PX(c,o,t,4,9,12,10,'#2e3418',s);
+  // Metal plate overlay on thorax
+  PX(c,o,t,5,10,4,4,'#506070',s);PX(c,o,t,11,10,4,4,'#506070',s);
+  c.fillStyle=`rgba(60,200,255,${pulse*0.7})`;
+  c.fillRect(Math.round(o+6*s),Math.round(t+11*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  c.fillRect(Math.round(o+12*s),Math.round(t+11*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  // Head — robot helmet with antenna
+  PX(c,o,t,4,3,12,7,'#303848',s);PX(c,o,t,5,2,10,8,'#404858',s);
+  PX(c,o,t,6,1,8,4,'#506070',s);
+  // Visor
+  c.fillStyle=`rgba(60,200,255,${pulse})`;
+  c.fillRect(Math.round(o+5*s),Math.round(t+4*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(3*s)));
+  // Antennae — metal rods
+  PX(c,o,t,6,-3,2,4,'#8090a0',s);PX(c,o,t,12,-3,2,4,'#8090a0',s);
+  PX(c,o,t,5,-4,3,2,'#c0d0e0',s);PX(c,o,t,12,-4,3,2,'#c0d0e0',s);
+  c.restore();
+}
+
+// ─── FRUIT FLY ───
+function spFruitfly(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-8*s,t=cy-10*s;
+  const wingPulse=Math.abs(Math.sin(G.tick*0.25));
+  // Wings — translucent iridescent
+  c.globalAlpha=0.55+wingPulse*0.25;
+  c.fillStyle='#a0e8ff';c.fillRect(Math.round(o-8*s),Math.round(t+1*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(7*s)));
+  c.fillStyle='#ffa0e0';c.fillRect(Math.round(o-6*s),Math.round(t+1*s),Math.max(1,Math.round(7*s)),Math.max(1,Math.round(5*s)));
+  c.fillStyle='#a0e8ff';c.fillRect(Math.round(o+14*s),Math.round(t+1*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(7*s)));
+  c.fillStyle='#ffa0e0';c.fillRect(Math.round(o+15*s),Math.round(t+1*s),Math.max(1,Math.round(7*s)),Math.max(1,Math.round(5*s)));
+  c.globalAlpha=1;
+  // Legs
+  PX(c,o,t,2,12,4,1,'#3a1808',s);PX(c,o,t,2,14,3,1,'#3a1808',s);
+  PX(c,o,t,10,12,4,1,'#3a1808',s);PX(c,o,t,11,14,3,1,'#3a1808',s);
+  // Abdomen — striped orange-brown
+  PX(c,o,t,2,8,12,8,'#c04818',s);
+  PX(c,o,t,2,9,12,2,'#e06030',s);PX(c,o,t,2,12,12,2,'#e06030',s);PX(c,o,t,2,15,12,2,'#e06030',s);
+  PX(c,o,t,2,8,12,1,'#f08040',s);
+  // Thorax
+  PX(c,o,t,3,4,10,5,'#3a1808',s);PX(c,o,t,4,3,8,5,'#602010',s);
+  // Head — round, huge red eyes
+  PX(c,o,t,3,0,10,5,'#2a1008',s);
+  c.fillStyle='#d01010';c.fillRect(Math.round(o+2*s),Math.round(t+0*s),Math.max(1,Math.round(4*s)),Math.max(1,Math.round(4*s)));
+  c.fillStyle='#f03030';c.fillRect(Math.round(o+2*s),Math.round(t+0*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  c.fillStyle='#d01010';c.fillRect(Math.round(o+10*s),Math.round(t+0*s),Math.max(1,Math.round(4*s)),Math.max(1,Math.round(4*s)));
+  c.fillStyle='#f03030';c.fillRect(Math.round(o+10*s),Math.round(t+0*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+  // Antennae
+  PX(c,o,t,4,-3,2,3,'#2a1008',s);PX(c,o,t,10,-3,2,3,'#2a1008',s);
+  c.restore();
+}
+
+// ─── INTERGALACTIC BEAN MOTH ───
+function spBeanmoth(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  const o=cx-14*s,t=cy-14*s;
+  const elec=0.5+0.5*Math.abs(Math.sin(G.tick*0.13));
+  // Electric aura
+  c.globalAlpha=elec*0.35;c.fillStyle='#40b8ff';c.beginPath();c.arc(cx,cy-2*s,22*s,0,Math.PI*2);c.fill();c.globalAlpha=1;
+  // Upper wings — large, blue-electric
+  c.fillStyle='#0a2a50';c.fillRect(Math.round(o+0*s),Math.round(t+2*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(14*s)));
+  c.fillStyle='#1040a0';c.fillRect(Math.round(o+1*s),Math.round(t+3*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(12*s)));
+  c.fillStyle='#2060e0';c.fillRect(Math.round(o+2*s),Math.round(t+4*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='#0a2a50';c.fillRect(Math.round(o+16*s),Math.round(t+2*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(14*s)));
+  c.fillStyle='#1040a0';c.fillRect(Math.round(o+17*s),Math.round(t+3*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(12*s)));
+  c.fillStyle='#2060e0';c.fillRect(Math.round(o+18*s),Math.round(t+4*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(8*s)));
+  // Lower wings
+  c.fillStyle='#0a2050';c.fillRect(Math.round(o+2*s),Math.round(t+14*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='#0a2050';c.fillRect(Math.round(o+16*s),Math.round(t+14*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(8*s)));
+  // Electric arc patterns on wings
+  c.fillStyle=`rgba(100,200,255,${elec*0.8})`;
+  c.fillRect(Math.round(o+3*s),Math.round(t+5*s),Math.max(1,Math.round(1*s)),Math.max(1,Math.round(8*s)));
+  c.fillRect(Math.round(o+5*s),Math.round(t+6*s),Math.max(1,Math.round(1*s)),Math.max(1,Math.round(6*s)));
+  c.fillRect(Math.round(o+7*s),Math.round(t+5*s),Math.max(1,Math.round(1*s)),Math.max(1,Math.round(8*s)));
+  c.fillRect(Math.round(o+21*s),Math.round(t+5*s),Math.max(1,Math.round(1*s)),Math.max(1,Math.round(8*s)));
+  c.fillRect(Math.round(o+23*s),Math.round(t+6*s),Math.max(1,Math.round(1*s)),Math.max(1,Math.round(6*s)));
+  c.fillRect(Math.round(o+25*s),Math.round(t+5*s),Math.max(1,Math.round(1*s)),Math.max(1,Math.round(8*s)));
+  // Eye spots
+  c.fillStyle=`rgba(160,240,255,${elec})`;
+  c.fillRect(Math.round(o+4*s),Math.round(t+7*s),Math.max(1,Math.round(4*s)),Math.max(1,Math.round(4*s)));
+  c.fillRect(Math.round(o+20*s),Math.round(t+7*s),Math.max(1,Math.round(4*s)),Math.max(1,Math.round(4*s)));
+  // Body
+  PX(c,o,t,12,2,4,20,'#0a1a2a',s);PX(c,o,t,12,3,4,18,'#0e2840',s);
+  // Fuzzy thorax
+  c.fillStyle='#1840a0';c.fillRect(Math.round(o+11*s),Math.round(t+4*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(6*s)));
+  c.fillStyle='rgba(100,180,255,0.4)';c.fillRect(Math.round(o+12*s),Math.round(t+4*s),Math.max(1,Math.round(4*s)),Math.max(1,Math.round(3*s)));
+  // Head
+  PX(c,o,t,11,0,6,4,'#0a1830',s);
+  // Eyes
+  c.fillStyle=`rgba(80,200,255,${elec})`;
+  c.fillRect(Math.round(o+11*s),Math.round(t+0*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+  c.fillRect(Math.round(o+14*s),Math.round(t+0*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+  // Antennae
+  PX(c,o,t,12,-5,1,5,'#1040a0',s);PX(c,o,t,15,-5,1,5,'#1040a0',s);
+  PX(c,o,t,11,-6,3,2,'#2060e0',s);PX(c,o,t,14,-6,3,2,'#2060e0',s);
+  c.restore();
+}
+
+// ─── I.G. BEAN (pre-hatch) ───
+function spIgbean(c,cx,cy,s,f){
+  c.save();
+  const pulse=0.6+0.4*Math.abs(Math.sin(G.tick*0.09));
+  c.globalAlpha=pulse*0.3;c.fillStyle='#40c8ff';c.beginPath();c.arc(cx,cy-2*s,12*s,0,Math.PI*2);c.fill();c.globalAlpha=1;
+  c.fillStyle='#1040a0';c.fillRect(Math.round(cx-6*s),Math.round(cy-10*s),Math.max(1,Math.round(12*s)),Math.max(1,Math.round(16*s)));
+  c.fillStyle='#1860c0';c.fillRect(Math.round(cx-5*s),Math.round(cy-9*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(14*s)));
+  c.fillStyle=`rgba(100,200,255,${pulse*0.7})`;
+  c.fillRect(Math.round(cx-3*s),Math.round(cy-8*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(10*s)));
+  c.fillRect(Math.round(cx+1*s),Math.round(cy-6*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='#0a2060';c.fillRect(Math.round(cx-4*s),Math.round(cy+5*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(4*s)));
+  c.fillStyle='#0e3080';c.fillRect(Math.round(cx-1*s),Math.round(cy-11*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(4*s)));
+  c.restore();
+}
+
+SFN.radiocockroach=spRadiocockroach;
+SFN.cyberant=spCyberant;
+SFN.fruitfly=spFruitfly;
+SFN.beanmoth=spBeanmoth;
+SFN.igbean=spIgbean;
+// Desert bugs — drawn as coloured silhouettes until full sprites are added
+function _spDesert(col,shape){return function(c,cx,cy,s,f){
+  c.save();
+  if(f){c.translate(cx,cy);c.scale(-1,1);c.translate(-cx,-cy);}
+  c.fillStyle=col;
+  shape(c,cx,cy,s);
+  c.restore();
+};}
+SFN.dlocust=_spDesert('#c8a020',function(c,cx,cy,s){
+  // Locust: long body, wings
+  c.fillRect(Math.round(cx-14*s),Math.round(cy-4*s),Math.max(1,Math.round(28*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='rgba(200,180,40,0.5)';
+  c.fillRect(Math.round(cx-12*s),Math.round(cy-10*s),Math.max(1,Math.round(24*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='#a07010';
+  c.fillRect(Math.round(cx+10*s),Math.round(cy-6*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(4*s)));
+  // Eye
+  c.fillStyle='#1a1010';
+  c.fillRect(Math.round(cx-13*s),Math.round(cy-3*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+});
+SFN.velvetant=_spDesert('#c02020',function(c,cx,cy,s){
+  // Red velvet ant: fuzzy segments
+  c.fillRect(Math.round(cx-4*s),Math.round(cy-8*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(8*s)));
+  c.fillRect(Math.round(cx-5*s),Math.round(cy+0*s),Math.max(1,Math.round(10*s)),Math.max(1,Math.round(10*s)));
+  c.fillStyle='#e04040';
+  c.fillRect(Math.round(cx-3*s),Math.round(cy+1*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(8*s)));
+  // Legs
+  c.fillStyle='#801010';
+  for(let i=0;i<3;i++){c.fillRect(Math.round(cx-10*s),Math.round(cy+(i*3)*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(1.5*s)));c.fillRect(Math.round(cx+4*s),Math.round(cy+(i*3)*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(1.5*s)));}
+});
+SFN.darkbeetle=_spDesert('#1a1820',function(c,cx,cy,s){
+  // Dark shiny beetle
+  c.fillRect(Math.round(cx-10*s),Math.round(cy-6*s),Math.max(1,Math.round(20*s)),Math.max(1,Math.round(16*s)));
+  c.fillStyle='#2a2830';
+  c.fillRect(Math.round(cx-8*s),Math.round(cy-8*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(5*s)));
+  c.fillStyle='rgba(80,80,120,0.4)';
+  c.fillRect(Math.round(cx-6*s),Math.round(cy-6*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(3*s)));
+  c.fillStyle='#0a0810';
+  for(let i=0;i<3;i++){c.fillRect(Math.round(cx-14*s),Math.round(cy+(i*4-4)*s),Math.max(1,Math.round(5*s)),Math.max(1,Math.round(2*s)));c.fillRect(Math.round(cx+9*s),Math.round(cy+(i*4-4)*s),Math.max(1,Math.round(5*s)),Math.max(1,Math.round(2*s)));}
+});
+SFN.desertant=_spDesert('#c07820',function(c,cx,cy,s){
+  c.fillRect(Math.round(cx-3*s),Math.round(cy-10*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(6*s)));
+  c.fillRect(Math.round(cx-4*s),Math.round(cy-2*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(7*s)));
+  c.fillRect(Math.round(cx-3*s),Math.round(cy+6*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(8*s)));
+  c.fillStyle='#a05810';
+  for(let i=0;i<3;i++){c.fillRect(Math.round(cx-9*s),Math.round(cy+(i*4-2)*s),Math.max(1,Math.round(5*s)),Math.max(1,Math.round(1.5*s)));c.fillRect(Math.round(cx+4*s),Math.round(cy+(i*4-2)*s),Math.max(1,Math.round(5*s)),Math.max(1,Math.round(1.5*s)));}
+  c.fillStyle='#1a1010';c.fillRect(Math.round(cx-2*s),Math.round(cy-9*s),Math.max(1,Math.round(2*s)),Math.max(1,Math.round(2*s)));
+});
+SFN.antlion=_spDesert('#806030',function(c,cx,cy,s){
+  // Antlion: fat body, big mandibles
+  c.fillRect(Math.round(cx-10*s),Math.round(cy-4*s),Math.max(1,Math.round(20*s)),Math.max(1,Math.round(14*s)));
+  c.fillStyle='#604820';
+  c.fillRect(Math.round(cx-8*s),Math.round(cy-6*s),Math.max(1,Math.round(16*s)),Math.max(1,Math.round(5*s)));
+  // Mandibles
+  c.fillStyle='#402810';
+  c.fillRect(Math.round(cx-14*s),Math.round(cy-2*s),Math.max(1,Math.round(6*s)),Math.max(1,Math.round(3*s)));
+  c.fillRect(Math.round(cx-14*s),Math.round(cy+2*s),Math.max(1,Math.round(8*s)),Math.max(1,Math.round(3*s)));
+  // Eye
+  c.fillStyle='#1a1010';c.fillRect(Math.round(cx-9*s),Math.round(cy-5*s),Math.max(1,Math.round(3*s)),Math.max(1,Math.round(3*s)));
+});
+
+
 function drawTrainerBattleSprite(ctx, x, y, sprite){
+  // ── Alien trio — three aliens side by side ──
+  if(sprite==='alien'){
+    const pulse=0.7+0.3*Math.abs(Math.sin(G.tick*0.08));
+    // Shared glow behind all three
+    ctx.save();
+    ctx.globalAlpha=0.25*pulse;
+    ctx.fillStyle='#40ff80';
+    ctx.beginPath();ctx.arc(x,y-20,70,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.restore();
+    // Three aliens at different x offsets and slight height variation
+    const positions=[
+      {dx:-52, dy:6,  s:1.3},
+      {dx:  0, dy:-4, s:1.5},
+      {dx: 52, dy:6,  s:1.3},
+    ];
+    positions.forEach(({dx,dy,s})=>{
+      drawAlienSprite(ctx, x+dx, y+dy, s);
+    });
+    return;
+  }
+
   ctx.save();
   ctx.fillStyle='rgba(0,0,0,0.18)';
   ctx.fillRect(Math.round(x-18),Math.round(y+22),36,6);
@@ -8435,6 +9161,7 @@ const EDITOR_ZONES=[
   {id:'shrine',   label:"Queen's Sanctum"},
   {id:'pc',       label:'Entomology Dept'},
   {id:'spaceship',label:'Out of This World'},
+  {id:'wreckage', label:'The Wreckage'},
 ];
 
 const EDITOR_TILES=[
@@ -8457,13 +9184,22 @@ const EDITOR_TILES=[
   {v:33, label:'Shrine',       solid:false,enc:false},
   {v:36, label:'Nest Wall',    solid:true, enc:false},
   {v:37, label:'Nest Tree',    solid:true, enc:false},
-  // Spaceship tiles
+  // Spaceship furniture
   {v:40, label:'Ship Floor',   solid:false,enc:false},
   {v:41, label:'Console Floor',solid:false,enc:false},
   {v:42, label:'Control Bank', solid:true, enc:false},
   {v:43, label:'Engine Core',  solid:true, enc:false},
   {v:44, label:'Entry Hatch',  solid:false,enc:false},
   {v:45, label:'Porthole',     solid:false,enc:false},
+  {v:46, label:'Chair Back',    solid:true, enc:false},
+  {v:47, label:'Chair Seat',    solid:false,enc:false},
+  {v:48, label:'Flask Table',   solid:true, enc:false},
+  {v:49, label:'Sudoku Terminal',solid:true,enc:false},
+  // Wreckage tiles
+  {v:50, label:'Encounter Sand', solid:false,enc:true},
+  {v:51, label:'Ship Hull',      solid:true, enc:false},
+  {v:52, label:'Smoking Debris', solid:true, enc:false},
+  {v:53, label:'Dune Rock',      solid:true, enc:false},
 ];
 
 const CUSTOM_TILE_BASE=100;
@@ -9748,7 +10484,7 @@ function edWarpToZone(zid, mode){
     else G.unlockedZones=new Set([1,2,3,'high','hive','shrine']);
   }
 
-  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20}};
+  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20},wreckage:{x:14,y:15}};
   const sp=spawns[zid]||{x:14,y:14};
   G.zone=zid;
   G.prevZone=typeof zid==='number'?zid:1;
@@ -9765,7 +10501,7 @@ function edWarpToZone(zid, mode){
 // ── Download ──
 function downloadEditor(){
   const mapData={};
-  [1,2,3,'high','hive','pc','spaceship'].forEach(z=>{
+  [1,2,3,'high','hive','pc','spaceship','wreckage'].forEach(z=>{
     if(MAPS[z]) mapData[z]=Array.from(MAPS[z]).map(row=>Array.from(row));
   });
   const src=document.documentElement.outerHTML;
