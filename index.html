@@ -275,7 +275,7 @@ const G={
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, honey:0, madHoney:0, igBean:0, igBeanSteps:0},
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, honey:0, madHoney:0, igBean:0, igBeanSteps:0, metalDetector:false, strangeMetal:0, wire:0, antiGravGen:0, strangeOrb:0},
   beeNestTrees:{checked:{}},
   // Rake system
   rake:{
@@ -605,7 +605,7 @@ function normalizeSavedLoadout(saved){
 }
 
 function resetAllMaps(){
-  [1,2,3,'high','hive','shrine','pc','spaceship','wreckage'].forEach(z=>resetMap(z));
+  [1,2,3,'high','hive','shrine','pc','spaceship','wreckage','newtown','felixlab'].forEach(z=>resetMap(z));
 }
 
 function getSaveData(){
@@ -641,6 +641,8 @@ function getSaveData(){
     _uid:         _uidCounter,
     alienActive:  !!(G.alien && G.alien.active),
     alienPhase:   G.alien ? G.alien.phase : null,
+    wreckageFound: G.wreckageFound||{},
+    scientistSpawned: !!G.scientistSpawned,
   };
 }
 
@@ -700,6 +702,11 @@ function loadFromSlot(n){
     G.pig.searching = false; G.pig.timer = 0; G.pig.result = null;
     G.bugdexScroll = d.bugdexScroll || 0;
     G.loadoutScroll = d.loadoutScroll || 0;
+    G.wreckageFound = d.wreckageFound || {};
+    G.scientistSpawned = !!d.scientistSpawned;
+    if(G.scientistSpawned){
+      G.scientist=G.scientist||{x:9*TW,y:13*TW,dir:1,arrived:true,talked:true};
+    }
     G.holder = {partyIndex:0,partyScroll:0,storageScroll:0,msg:''};
     G.keys = {};
     G.battle = null; G.battleParty = [];
@@ -1460,13 +1467,13 @@ function buildMap(z){
   return m;
 }
 
-function getMap(z){if(!MAPS[z])MAPS[z]= z==='spaceship' ? buildSpaceshipMap() : z==='wreckage' ? buildWreckageMap() : buildMap(z);return MAPS[z];}
+function getMap(z){if(!MAPS[z])MAPS[z]= z==='spaceship' ? buildSpaceshipMap() : z==='wreckage' ? buildWreckageMap() : z==='newtown' ? buildNewtownMap() : z==='felixlab' ? buildFelixLabMap() : buildMap(z);return MAPS[z];}
 function gt(z,tx,ty){
   if(tx<0||ty<0||tx>=WIDE||ty>=TALL)return 2;
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43&&t!==46&&t!==48&&t!==49&&t!==51&&t!==52&&t!==53;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43&&t!==46&&t!==48&&t!==49&&t!==51&&t!==52&&t!==53&&t!==54&&t!==58&&t!==61;}
 function isEncounter(t){return t===1||t===7||t===9||t===27||t===30||t===50;}
 function isWater(t){return t===7;}
 
@@ -2125,7 +2132,7 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 // WORLD DRAW
 // ═══════════════════════════════════════════════
-const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD',wreckage:'THE WRECKAGE'};
+const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD',wreckage:'THE WRECKAGE',newtown:'SCATTERED ROCK',felixlab:"FELIX'S LAB"};
 
 function snapPlayerToTile(){
   const p=G.player;
@@ -2394,6 +2401,8 @@ function drawWorld(){
     const sx=tx*TW-camX,sy=ty*TW-camY;
     if(sx<-TW||sx>496||sy<-TW||sy>448)continue;
     if(G.zone==='wreckage') drawTileWreckage(tile,sx,sy,tx,ty);
+    else if(G.zone==='newtown') drawTileNewtown(tile,sx,sy,tx,ty);
+    else if(G.zone==='felixlab') drawTileFelixLab(tile,sx,sy,tx,ty);
     else drawTile(tile,sx,sy,tx,ty);
   }
 
@@ -2404,6 +2413,13 @@ function drawWorld(){
   if(G.zone==='wreckage'){
     const cX=16*TW-camX, cY=21*TW-camY;
     drawCamelSprite(X,cX,cY,1.4);
+    updateScientist();
+    drawScientistNPC(camX,camY);
+  }
+  // Trigger truck cutscene after dialog
+  if(G._truckCutscenePending&&G.pcMsgTimer<=0){
+    startTruckCutscene();
+    return;
   }
 
   // NPC trainers
@@ -2836,7 +2852,7 @@ function recoverAfterWhiteout(){
 // ═══════════════════════════════════════════════
 // BATTLE
 // ═══════════════════════════════════════════════
-const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'},hive:{sky:'#f8e840',hor:'#f0c010',gnd:'#50a028',gnd2:'#70c848',plat:'#d4a820'},shrine:{sky:'#f0c840',hor:'#d4900a',gnd:'#a06000',gnd2:'#c08010',plat:'#f0d060'},wreckage:{sky:'#d4a060',hor:'#e8b870',gnd:'#c8a050',gnd2:'#d4b468',plat:'#a08040'}};
+const BATZ={1:{sky:'#68a8e8',hor:'#90c8f0',gnd:'#50a028',gnd2:'#70c848',plat:'#c8b060'},2:{sky:'#2858a0',hor:'#4888c8',gnd:'#308060',gnd2:'#50a878',plat:'#608898'},3:{sky:'#180828',hor:'#381050',gnd:'#401860',gnd2:'#602888',plat:'#705888'},high:{sky:'#65e8ff',hor:'#ffe050',gnd:'#25e868',gnd2:'#ff4bd8',plat:'#c07830'},hive:{sky:'#f8e840',hor:'#f0c010',gnd:'#50a028',gnd2:'#70c848',plat:'#d4a820'},shrine:{sky:'#f0c840',hor:'#d4900a',gnd:'#a06000',gnd2:'#c08010',plat:'#f0d060'},wreckage:{sky:'#d4a060',hor:'#e8b870',gnd:'#c8a050',gnd2:'#d4b468',plat:'#a08040'},newtown:{sky:'#6888c0',hor:'#90a8d8',gnd:'#505868',gnd2:'#707888',plat:'#a09080'},felixlab:{sky:'#202838',hor:'#304858',gnd:'#3a4860',gnd2:'#4a5870',plat:'#607090'}};
 // Draw a bug net (handle + hoop + mesh bag) at position (cx,cy), rotated by angle.
 // cx,cy = centre of the hoop. angle = rotation of the whole tool (0 = handle pointing left).
 function drawBugNet(ctx, cx, cy, angle, meshOpen){
@@ -3747,7 +3763,6 @@ function getTalkNPC(){
   return NPCS.find(n=>n.zone===G.zone&&playerCanTalkToNPC(n));
 }
 function doZAction(allowRake=true){
-  // Z = interact with facing tile/NPC, or rake if standing in water with rake
   const p=G.player, tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
 
   // Spaceship interior interactions
@@ -3758,10 +3773,69 @@ function doZAction(allowRake=true){
     return;
   }
 
+  // Wreckage — check facing tile first, then metal detect as fallback
+  if(G.zone==='wreckage'){
+    const dirs2=[[0,-1],[1,0],[0,1],[-1,0]];
+    const[ddx2,ddy2]=dirs2[p.dir]||[0,1];
+    const ftile2=gt('wreckage',tx+ddx2,ty+ddy2);
+    // Bug portal — always takes priority
+    if(ftile2===54){
+      G.pcMsg='BUG PORTAL:\n"Must\'ve been in the\nship when it crashed.\nStill works though."';
+      G.pcMsgTimer=200;
+      setTimeout(()=>openBugHolder(),1500);
+      return;
+    }
+    // Scientist nearby
+    if(G.scientistSpawned&&G.scientist&&G.scientist.arrived&&isScientistNearPlayer()){
+      talkToScientist(); return;
+    }
+    // NPC battle
+    if(interactWithFacingNPC())return;
+    // Metal detect — only if nothing else to interact with
+    const curTile=gt('wreckage',tx,ty);
+    if(G.inventory.metalDetector&&(curTile===50||curTile===55)){
+      doMetalDetectDig(); return;
+    }
+    return;
+  }
+
+  // Newtown — lab door enters felix lab
+  if(G.zone==='newtown'){
+    const dirs3=[[0,-1],[1,0],[0,1],[-1,0]];
+    const[ddx3,ddy3]=dirs3[p.dir]||[0,1];
+    const ftile3=gt('newtown',tx+ddx3,ty+ddy3);
+    if(ftile3===59){
+      G.prevZone='newtown';
+      G.zone='felixlab'; resetMap('felixlab');
+      p.x=14*TW; p.y=23*TW; p.dir=0;
+      p.visX=p.x; p.visY=p.y;
+      showZoneName('felixlab');
+      G.pcMsg='You step into\nDr. Okafor\'s lab.\nIt smells like\nburned solder and\ninstant noodles.';
+      G.pcMsgTimer=240;
+      sfx&&sfx('portal');
+      return;
+    }
+    if(interactWithFacingNPC())return;
+    return;
+  }
+
+  // Felix lab — exit door returns to newtown
+  if(G.zone==='felixlab'){
+    const curTile=gt('felixlab',tx,ty);
+    if(curTile===62||(ty>=TALL-3&&tx>=13&&tx<=15)){
+      G.zone='newtown'; resetMap('newtown');
+      p.x=14*TW; p.y=14*TW; p.dir=2;
+      p.visX=p.x; p.visY=p.y;
+      showZoneName('newtown');
+      sfx&&sfx('portal');
+      return;
+    }
+    if(interactWithFacingNPC())return;
+    return;
+  }
+
   const curTile=gt(G.zone,tx,ty);
-  // Rake if standing in water with the rake equipped
   if(allowRake && G.inventory.lakeRake && isWater(curTile)){ doRakeAction(); return; }
-  // Otherwise: interact with facing tile or NPC
   const dirs=[[0,-1],[1,0],[0,1],[-1,0]];
   const[ddx,ddy]=dirs[p.dir]||[0,1];
   const ftile=gt(G.zone,tx+ddx,ty+ddy);
@@ -4969,8 +5043,387 @@ function finishReturnToEarth(){
 }
 
 // ═══════════════════════════════════════════════
-// WRECKAGE BIOME
+// WRECKAGE — DIG SPOTS, SCIENTIST, CUTSCENE
 // ═══════════════════════════════════════════════
+
+// Each dig spot: tx/ty in wreckage map, what it contains, key for "found" tracking
+const WRECKAGE_DIG_SPOTS = [
+  // strangeMetal (10)
+  {tx:4, ty:5,  loot:'strangeMetal', key:'dig_4_5'},
+  {tx:7, ty:11, loot:'strangeMetal', key:'dig_7_11'},
+  {tx:10,ty:15, loot:'strangeMetal', key:'dig_10_15'},
+  {tx:19,ty:6,  loot:'strangeMetal', key:'dig_19_6'},
+  {tx:23,ty:9,  loot:'strangeMetal', key:'dig_23_9'},
+  {tx:25,ty:14, loot:'strangeMetal', key:'dig_25_14'},
+  {tx:3, ty:20, loot:'strangeMetal', key:'dig_3_20'},
+  {tx:11,ty:22, loot:'strangeMetal', key:'dig_11_22'},
+  {tx:21,ty:21, loot:'strangeMetal', key:'dig_21_21'},
+  {tx:26,ty:19, loot:'strangeMetal', key:'dig_26_19'},
+  // wire (8)
+  {tx:5, ty:8,  loot:'wire', key:'dig_5_8'},
+  {tx:12,ty:12, loot:'wire', key:'dig_12_12'},
+  {tx:17,ty:9,  loot:'wire', key:'dig_17_9'},
+  {tx:22,ty:16, loot:'wire', key:'dig_22_16'},
+  {tx:6, ty:17, loot:'wire', key:'dig_6_17'},
+  {tx:18,ty:22, loot:'wire', key:'dig_18_22'},
+  {tx:25,ty:22, loot:'wire', key:'dig_25_22'},
+  {tx:3, ty:10, loot:'wire', key:'dig_3_10'},
+  // antiGravGen (1)
+  {tx:15,ty:19, loot:'antiGravGen', key:'dig_15_19'},
+  // strangeOrb (3)
+  {tx:8, ty:24, loot:'strangeOrb', key:'dig_8_24'},
+  {tx:20,ty:11, loot:'strangeOrb', key:'dig_20_11'},
+  {tx:13,ty:7,  loot:'strangeOrb', key:'dig_13_7'},
+];
+
+const LOOT_LABELS={strangeMetal:'Strange Metal',wire:'Salvage Wire',antiGravGen:'Anti-Grav Generator',strangeOrb:'Strange Orb'};
+const TOTAL_PIECES=22; // 10+8+1+3
+
+function totalPiecesFound(){
+  const inv=G.inventory;
+  return (inv.strangeMetal||0)+(inv.wire||0)+(inv.antiGravGen||0)+(inv.strangeOrb||0);
+}
+
+function doMetalDetectDig(){
+  const p=G.player;
+  const tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
+  if(!G.inventory.metalDetector){ G.pcMsg='You need a\nmetal detector\nfor this.'; G.pcMsgTimer=160; return; }
+  const spot=WRECKAGE_DIG_SPOTS.find(s=>s.tx===tx&&s.ty===ty);
+  if(!spot){ G.pcMsg='The detector hums...\nNothing here.'; G.pcMsgTimer=160; return; }
+  if(G.wreckageFound&&G.wreckageFound[spot.key]){
+    G.pcMsg='Already dug here.\nNothing left.'; G.pcMsgTimer=160; return;
+  }
+  // First dig ever — trigger scientist
+  const firstDig=!G.wreckageFound||Object.keys(G.wreckageFound).length===0;
+  G.wreckageFound=G.wreckageFound||{};
+  G.wreckageFound[spot.key]=true;
+  G.inventory[spot.loot]=(G.inventory[spot.loot]||0)+1;
+  // Replace tile with plain sand (mark as dug)
+  if(MAPS['wreckage']) MAPS['wreckage'][ty][tx]=0;
+  sfx&&sfx('catch');
+  G.pcMsg=`The detector beeps!\nYou dig up:\n${LOOT_LABELS[spot.loot]}!\n(${totalPiecesFound()}/${TOTAL_PIECES} found)`;
+  G.pcMsgTimer=240;
+  if(firstDig) spawnScientist();
+  autoSave();
+}
+
+// ── SCIENTIST NPC — Dr. Felix Okafor ──
+function spawnScientist(){
+  if(G.scientistSpawned) return;
+  G.scientistSpawned=true;
+  G.scientist={
+    x:2*TW, y:13*TW, dir:1, // enters from left edge on path row 13
+    walkTarget:{x:9*TW, y:13*TW}, // walks to player area
+    arrived:false, talked:false
+  };
+}
+
+function updateScientist(){
+  const sc=G.scientist;
+  if(!sc||G.zone!=='wreckage'||sc.arrived) return;
+  const spd=1.4;
+  const dx=sc.walkTarget.x-sc.x, dy=sc.walkTarget.y-sc.y;
+  if(Math.abs(dx)<2&&Math.abs(dy)<2){
+    sc.x=sc.walkTarget.x; sc.y=sc.walkTarget.y;
+    sc.arrived=true;
+    // Auto-dialog on arrival
+    G.pcMsg='DR. FELIX OKAFOR:\n"I saw this ship crash\nin my telescope last\nnight — quick, let\'s\ncollect everything\nbefore anyone gets here!"';
+    G.pcMsgTimer=380;
+    sc.talked=true;
+  } else {
+    sc.x+=Math.sign(dx)*Math.min(spd,Math.abs(dx));
+    sc.y+=Math.sign(dy)*Math.min(spd,Math.abs(dy));
+    sc.dir=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
+  }
+}
+
+function drawScientistNPC(camX,camY){
+  const sc=G.scientist;
+  if(!sc||G.zone!=='wreckage') return;
+  const sx=sc.x-camX, sy=sc.y-camY;
+  if(sx<-32||sx>GAME_W+32||sy<-32||sy>GAME_H+32) return;
+  // Draw scientist: white lab coat
+  const ctx=X;
+  ctx.save();
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fillRect(Math.round(sx-7),Math.round(sy+10),14,4);
+  // Coat body
+  ctx.fillStyle='#f0f0f0'; ctx.fillRect(Math.round(sx-5),Math.round(sy-12),10,16);
+  ctx.fillStyle='#e0e0e8'; ctx.fillRect(Math.round(sx-4),Math.round(sy-11),8,14);
+  // Coat lapels
+  ctx.fillStyle='#d0d0d8';
+  ctx.fillRect(Math.round(sx-5),Math.round(sy-12),3,6);
+  ctx.fillRect(Math.round(sx+2),Math.round(sy-12),3,6);
+  // Shirt/tie
+  ctx.fillStyle='#4080c0'; ctx.fillRect(Math.round(sx-1),Math.round(sy-11),2,8);
+  // Arms
+  ctx.fillStyle='#f0f0f0';
+  ctx.fillRect(Math.round(sx-8),Math.round(sy-10),3,10);
+  ctx.fillRect(Math.round(sx+5),Math.round(sy-10),3,10);
+  // Hands
+  ctx.fillStyle='#c09070';
+  ctx.fillRect(Math.round(sx-8),Math.round(sy+0),3,3);
+  ctx.fillRect(Math.round(sx+5),Math.round(sy+0),3,3);
+  // Legs
+  ctx.fillStyle='#303848';
+  ctx.fillRect(Math.round(sx-4),Math.round(sy+4),4,8);
+  ctx.fillRect(Math.round(sx+0),Math.round(sy+4),4,8);
+  // Shoes
+  ctx.fillStyle='#1a1a28';
+  ctx.fillRect(Math.round(sx-5),Math.round(sy+11),5,3);
+  ctx.fillRect(Math.round(sx+0),Math.round(sy+11),5,3);
+  // Head
+  ctx.fillStyle='#c09070'; ctx.fillRect(Math.round(sx-4),Math.round(sy-22),8,10);
+  // Hair — dark
+  ctx.fillStyle='#281808'; ctx.fillRect(Math.round(sx-4),Math.round(sy-22),8,4);
+  // Glasses
+  ctx.fillStyle='#303848';
+  ctx.fillRect(Math.round(sx-4),Math.round(sy-16),3,2);
+  ctx.fillRect(Math.round(sx+1),Math.round(sy-16),3,2);
+  ctx.fillStyle='rgba(150,200,255,0.5)';
+  ctx.fillRect(Math.round(sx-3),Math.round(sy-16),2,2);
+  ctx.fillRect(Math.round(sx+2),Math.round(sy-16),2,2);
+  // Clipboard
+  ctx.fillStyle='#e8d090'; ctx.fillRect(Math.round(sx+5),Math.round(sy-8),6,8);
+  ctx.fillStyle='#404858'; ctx.fillRect(Math.round(sx+6),Math.round(sy-7),4,6);
+  ctx.restore();
+}
+
+function talkToScientist(){
+  const inv=G.inventory;
+  const total=totalPiecesFound();
+  const sm=inv.strangeMetal||0, wi=inv.wire||0, ag=inv.antiGravGen||0, so=inv.strangeOrb||0;
+  if(total>=TOTAL_PIECES){
+    // All collected — trigger truck cutscene
+    G.pcMsg='DR. FELIX OKAFOR:\n"This is everything.\nIncredible. My truck\nis just over that dune.\nHop in — I need to\nshow you my lab."';
+    G.pcMsgTimer=320;
+    G._truckCutscenePending=true;
+    return;
+  }
+  const need=`Metal:${10-sm} Wire:${8-wi}\nAnti-Grav:${1-ag} Orbs:${3-so}`;
+  G.pcMsg=`DR. FELIX OKAFOR:\n"${total}/${TOTAL_PIECES} pieces!\nKeep scanning —\nyou still need:\n${need}"`;
+  G.pcMsgTimer=300;
+}
+
+function isScientistNearPlayer(){
+  const sc=G.scientist;
+  if(!sc||!sc.arrived) return false;
+  const p=G.player;
+  return Math.abs(sc.x-p.x)<TW*2&&Math.abs(sc.y-p.y)<TW*2;
+}
+
+// ── TRUCK CUTSCENE ──
+function startTruckCutscene(){
+  G._truckCutscenePending=false;
+  G.screen='truckCutscene';
+  G._truck={timer:0, phase:'drive'};
+}
+
+function drawTruckCutscene(){
+  const tc=G._truck;
+  if(!tc){G.screen='world';return;}
+  tc.timer++;
+
+  // Scrolling desert road
+  const scroll=tc.timer*3;
+  X.fillStyle='#d4a060'; X.fillRect(0,0,GAME_W,GAME_H);
+  // Sky
+  X.fillStyle='#d4905a'; X.fillRect(0,0,GAME_W,180);
+  // Road
+  X.fillStyle='#808070'; X.fillRect(100,180,280,252);
+  X.fillStyle='#707060'; X.fillRect(220,180,40,252);
+  // Dashes on road
+  for(let i=0;i<6;i++){
+    const dy=((i*80-scroll)%480+480)%480;
+    X.fillStyle='#f0e090'; X.fillRect(234,180+dy,12,40);
+  }
+  // Moving desert horizon objects
+  for(let i=0;i<5;i++){
+    const ox=((i*120+Math.floor(scroll*0.3))%560-40);
+    X.fillStyle='#c09040'; X.fillRect(ox,140,30,40);
+    X.fillStyle='#b08030'; X.fillRect(ox+5,130,20,16);
+  }
+  // Truck body (stationary in frame, road scrolls)
+  // Cab
+  X.fillStyle='#404858'; X.fillRect(160,210,160,100);
+  X.fillStyle='#505868'; X.fillRect(168,218,144,60);
+  // Windshield
+  X.fillStyle='rgba(140,200,240,0.6)'; X.fillRect(260,220,56,50);
+  // Hood
+  X.fillStyle='#303848'; X.fillRect(280,280,80,30);
+  // Wheels
+  X.fillStyle='#1a1a1a';
+  X.beginPath();X.arc(200,310,22,0,Math.PI*2);X.fill();
+  X.beginPath();X.arc(320,310,22,0,Math.PI*2);X.fill();
+  X.fillStyle='#606060';
+  X.beginPath();X.arc(200,310,10,0,Math.PI*2);X.fill();
+  X.beginPath();X.arc(320,310,10,0,Math.PI*2);X.fill();
+  // Exhaust puff
+  const puff=0.3+0.3*Math.sin(tc.timer*0.2);
+  X.fillStyle=`rgba(180,180,160,${puff})`; X.fillRect(155,270,10,20);
+  // Dialog strip
+  X.fillStyle='rgba(0,0,0,0.7)'; X.fillRect(0,358,480,74);
+  X.fillStyle='#60a8ff'; X.fillRect(0,358,480,3);
+  if(tc.timer<180){
+    T('DR. FELIX OKAFOR:',14,376,6,'#90c8ff');
+    T('"She\'s gonna love',14,392,6,'#ffffff');
+    T('this haul..."',14,408,6,'#ffffff');
+  } else if(tc.timer<320){
+    T('DR. FELIX OKAFOR:',14,376,6,'#90c8ff');
+    T('"Almost there.',14,392,6,'#ffffff');
+    T('My lab\'s just ahead."',14,408,6,'#ffffff');
+  } else {
+    // Fade to black
+    const alpha=Math.min(1,(tc.timer-320)/60);
+    X.fillStyle=`rgba(0,0,0,${alpha})`; X.fillRect(0,0,GAME_W,GAME_H);
+    if(tc.timer>380) finishTruckCutscene();
+  }
+}
+
+function finishTruckCutscene(){
+  G._truck=null;
+  G.zone='newtown'; resetMap('newtown');
+  G.prevZone='wreckage';
+  const p=G.player;
+  p.x=14*TW; p.y=22*TW; p.dir=0;
+  p.visX=p.x; p.visY=p.y;
+  G.moveDelay=30;
+  if(!G.unlockedZones) G.unlockedZones=new Set();
+  G.unlockedZones.add('newtown');
+  showZoneName('newtown');
+  G.pcMsg='You arrive at\nSCATTERED ROCK.\nDr. Okafor\'s lab\nis just up ahead.\nThe town smells like\ncoffee and diesel.';
+  G.pcMsgTimer=340;
+  G.screen='world';
+  sfx&&sfx('portal');
+}
+
+// ═══════════════════════════════════════════════
+// NEWTOWN — SCATTERED ROCK
+// ═══════════════════════════════════════════════
+// Tile IDs: 56=city road, 57=pavement, 58=building solid, 59=lab door
+const ZN_NEWTOWN='SCATTERED ROCK';
+
+function buildNewtownMap(){
+  const m=Array.from({length:TALL},()=>new Uint8Array(WIDE));
+  for(let x=0;x<WIDE;x++){m[0][x]=2;m[TALL-1][x]=2;}
+  for(let y=0;y<TALL;y++){m[y][0]=2;m[y][WIDE-1]=2;}
+  // Ground — pavement (tile 57)
+  for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=57;
+  // Main road vertical (tile 56)
+  for(let y=1;y<TALL-1;y++){m[y][13]=56;m[y][14]=56;m[y][15]=56;}
+  // Road horizontal mid
+  for(let x=1;x<WIDE-1;x++){m[13][x]=56;m[14][x]=56;}
+  // Buildings — solid blocks (tile 58)
+  // Left block (shops)
+  for(let y=2;y<=11;y++) for(let x=2;x<=11;x++) m[y][x]=58;
+  // Right block
+  for(let y=2;y<=11;y++) for(let x=17;x<=27;x++) m[y][x]=58;
+  // Bottom-left building
+  for(let y=16;y<=24;y++) for(let x=2;x<=10;x++) m[y][x]=58;
+  // Felix lab — bottom-right (tile 58 walls, 59 = lab door walkable)
+  for(let y=16;y<=24;y++) for(let x=17;x<=27;x++) m[y][x]=58;
+  // Doorways (walkable openings into buildings)
+  m[12][6]=57; m[12][7]=57; // left shop entrance
+  m[12][21]=57; m[12][22]=57; // right shop entrance
+  m[15][6]=57; m[15][7]=57; // bottom-left entrance
+  // Felix lab door
+  m[15][21]=59; m[15][22]=59;
+  // Sidewalk strips adjacent to road
+  return m;
+}
+
+function drawTileNewtown(tile,sx,sy,tx,ty){
+  if(tile===56){ // Road
+    X.fillStyle='#505050'; X.fillRect(sx,sy,TW,TW);
+    // Lane marking
+    if((tx+ty)%8===0){ X.fillStyle='rgba(240,220,80,0.6)'; X.fillRect(sx+6,sy,3,TW); }
+    return;
+  }
+  if(tile===57){ // Pavement
+    const checker=(tx+ty)%2;
+    X.fillStyle=checker?'#c8c0b0':'#d8d0c0'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='rgba(0,0,0,0.06)'; X.fillRect(sx,sy,TW,1); X.fillRect(sx,sy,1,TW);
+    return;
+  }
+  if(tile===58){ // Building wall
+    X.fillStyle='#8a6848'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#9a7858'; X.fillRect(sx+1,sy+1,TW-2,TW-2);
+    // Window every few tiles
+    if((tx%3===1)&&(ty%3===1)){
+      X.fillStyle='rgba(200,220,255,0.5)'; X.fillRect(sx+3,sy+3,TW-6,TW-6);
+      X.fillStyle='rgba(255,255,255,0.3)'; X.fillRect(sx+4,sy+4,4,3);
+    }
+    return;
+  }
+  if(tile===59){ // Lab door
+    X.fillStyle='#c8c0b0'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#2060a0'; X.fillRect(sx+2,sy+1,TW-4,TW-2);
+    X.fillStyle='rgba(150,200,255,0.6)'; X.fillRect(sx+4,sy+3,TW-8,TW-6);
+    // Lab sign glow
+    const glow=0.5+0.5*Math.abs(Math.sin(G.tick*0.06));
+    X.fillStyle=`rgba(100,180,255,${glow*0.5})`;
+    X.fillRect(sx+3,sy+2,TW-6,4);
+    return;
+  }
+  if(tile===2){
+    X.fillStyle='#6a5038'; X.fillRect(sx,sy,TW,TW);
+    return;
+  }
+  X.fillStyle='#b0a890'; X.fillRect(sx,sy,TW,TW);
+}
+
+// ═══════════════════════════════════════════════
+// FELIX LAB BIOME
+// ═══════════════════════════════════════════════
+// Tile IDs: 60=lab floor, 61=lab bench (solid), 62=lab door out
+function buildFelixLabMap(){
+  const m=Array.from({length:TALL},()=>new Uint8Array(WIDE));
+  for(let x=0;x<WIDE;x++){m[0][x]=2;m[TALL-1][x]=2;}
+  for(let y=0;y<TALL;y++){m[y][0]=2;m[y][WIDE-1]=2;}
+  for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=60;
+  // Lab benches along walls
+  for(let x=2;x<=27;x++) m[2][x]=61;
+  for(let x=2;x<=27;x++) m[3][x]=61;
+  for(let x=2;x<=27;x++) m[22][x]=61;
+  for(let y=5;y<=20;y++){m[y][2]=61;m[y][3]=61;}
+  for(let y=5;y<=20;y++){m[y][26]=61;m[y][27]=61;}
+  // Exit door
+  m[TALL-2][13]=62; m[TALL-2][14]=62; m[TALL-2][15]=62;
+  return m;
+}
+
+function drawTileFelixLab(tile,sx,sy,tx,ty){
+  if(tile===60){ // Lab floor
+    X.fillStyle=(tx+ty)%2===0?'#e8e4f0':'#f0ecf8'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='rgba(0,0,0,0.06)'; X.fillRect(sx,sy,1,TW); X.fillRect(sx,sy,TW,1);
+    return;
+  }
+  if(tile===61){ // Lab bench
+    X.fillStyle='#506080'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#607090'; X.fillRect(sx+1,sy+1,TW-2,TW-2);
+    // Equipment items based on position
+    if((tx*3+ty*7)%5===0){
+      const blink=0.5+0.5*Math.abs(Math.sin(G.tick*0.08+tx*0.5));
+      X.fillStyle=`rgba(60,200,120,${blink})`;
+      X.fillRect(sx+4,sy+4,TW-8,TW-8);
+    }
+    if((tx+ty)%4===2){
+      X.fillStyle='rgba(100,160,255,0.5)';
+      X.beginPath(); X.arc(sx+TW/2,sy+TW/2,4,0,Math.PI*2); X.fill();
+    }
+    return;
+  }
+  if(tile===62){ // Exit door
+    X.fillStyle='#c8c0b0'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#804020'; X.fillRect(sx+2,sy+1,TW-4,TW-2);
+    X.fillStyle='rgba(200,160,80,0.5)'; X.fillRect(sx+4,sy+3,TW-8,TW-6);
+    return;
+  }
+  if(tile===2){ X.fillStyle='#303848'; X.fillRect(sx,sy,TW,TW); return; }
+  X.fillStyle='#e8e4f0'; X.fillRect(sx,sy,TW,TW);
+}
+
+
 // Tile legend:
 //  0  = plain sand floor (no encounter)
 //  50 = encounter sand (half rate)
@@ -4981,36 +5434,34 @@ function finishReturnToEarth(){
 
 function buildWreckageMap(){
   const m=Array.from({length:TALL},()=>new Uint8Array(WIDE));
-  // Border
   for(let x=0;x<WIDE;x++){m[0][x]=2;m[TALL-1][x]=2;}
   for(let y=0;y<TALL;y++){m[y][0]=2;m[y][WIDE-1]=2;}
-  // Interior — all sand, encounter sand in open areas
   for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=50;
-  // Some plain-sand dune paths (no encounter)
+  // Plain-sand paths
   for(let x=3;x<=26;x++) m[13][x]=0;
   for(let x=3;x<=26;x++) m[18][x]=0;
   for(let y=3;y<=23;y++) m[y][14]=0;
-  // Crashed ship hull — top-centre area
+  // Crashed ship hull
   const shipCells=[
     [3,9],[3,10],[3,11],[3,12],[3,13],[3,14],[3,15],[3,16],[3,17],[3,18],[3,19],[3,20],
-    [4,8],[4,9],[4,20],[4,21],
-    [5,8],[5,9],[5,20],[5,21],
-    [6,7],[6,8],[6,21],[6,22],
-    [7,7],[7,8],[7,21],[7,22],
+    [4,8],[4,9],[4,20],[4,21],[5,8],[5,9],[5,20],[5,21],
+    [6,7],[6,8],[6,21],[6,22],[7,7],[7,8],[7,21],[7,22],
     [8,8],[8,9],[8,20],[8,21],
-    // Crumpled centre section
-    [4,13],[4,14],[4,15],[4,16],
-    [5,12],[5,13],[5,16],[5,17],
-    [6,11],[6,12],[6,17],[6,18],
+    [4,13],[4,14],[4,15],[4,16],[5,12],[5,13],[5,16],[5,17],[6,11],[6,12],[6,17],[6,18],
   ];
   shipCells.forEach(([y,x])=>{if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=51;});
-  // Smoking debris scattered around crash site
-  const debris=[[9,10],[9,12],[9,16],[9,18],[10,8],[10,11],[10,17],[10,20],[11,9],[11,15],[11,19]];
-  debris.forEach(([y,x])=>{if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=52;});
-  // Dune rocks around edges
+  // Smoking debris
+  [[9,10],[9,12],[9,16],[9,18],[10,8],[10,11],[10,17],[10,20],[11,9],[11,15],[11,19]]
+    .forEach(([y,x])=>{if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=52;});
+  // Dune rocks
   [[2,2],[2,3],[4,3],[6,3],[2,25],[4,26],[6,26],[20,2],[22,2],[24,2],[20,26],[22,26],[24,26],
-   [14,2],[14,3],[16,2],[16,26],[14,26]].forEach(([y,x])=>{
-    if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=53;
+   [14,2],[14,3],[16,2],[16,26],[14,26]]
+    .forEach(([y,x])=>{if(x>=0&&x<WIDE&&y>=0&&y<TALL) m[y][x]=53;});
+  // Bug portal (tile 54) — solid, standing in front to interact
+  m[16][5]=54;
+  // Metal detect spots (tile 55) — 10 strangeMetal, 8 wire, 1 antiGrav, 3 strangeOrb
+  WRECKAGE_DIG_SPOTS.forEach(({ty:dy,tx:dx})=>{
+    if(dx>=0&&dx<WIDE&&dy>=0&&dy<TALL) m[dy][dx]=55;
   });
   return m;
 }
@@ -5055,6 +5506,40 @@ function drawTileWreckage(tile,sx,sy,tx,ty){
     const sp2=0.3+0.25*Math.sin(G.tick*0.09+ty*0.9+1);
     X.fillStyle=`rgba(100,100,100,${sp})`; X.fillRect(sx+5,sy-2,3,5);
     X.fillStyle=`rgba(120,120,120,${sp2})`; X.fillRect(sx+8,sy-4,2,6);
+    return;
+  }
+  if(tile===54){ // Bug portal (solid)
+    X.fillStyle='#c8a050'; X.fillRect(sx,sy,TW,TW); // sand base
+    X.fillStyle='#202030'; X.fillRect(sx+1,sy+1,TW-2,TW-2);
+    X.fillStyle='#2a2a40'; X.fillRect(sx+2,sy+2,TW-4,TW-4);
+    // Portal swirl
+    const ps=0.5+0.5*Math.abs(Math.sin(G.tick*0.07+tx*0.9));
+    X.fillStyle=`rgba(80,120,255,${ps*0.8})`;
+    X.beginPath();X.arc(sx+TW/2,sy+TW/2,5,0,Math.PI*2);X.fill();
+    X.fillStyle=`rgba(140,180,255,${ps})`;
+    X.beginPath();X.arc(sx+TW/2,sy+TW/2,2,0,Math.PI*2);X.fill();
+    // Bug silhouette on portal
+    X.fillStyle=`rgba(60,100,220,${ps*0.6})`;
+    X.fillRect(sx+4,sy+3,8,5);X.fillRect(sx+5,sy+2,6,2);
+    // Label
+    X.fillStyle='rgba(100,140,255,0.7)'; X.font='5px monospace'; X.textAlign='center';
+    X.fillText('BUG', sx+TW/2, sy+TW-3); X.textAlign='left';
+    return;
+  }
+  if(tile===55){ // Metal detect spot — slightly disturbed sand
+    // Base sand
+    const shade2=(Math.sin(tx*0.4+ty*0.3)*0.06+Math.cos(tx*0.7-ty*0.5)*0.04);
+    const r2=Math.round(210+shade2*30), g3=Math.round(178+shade2*20), b2=Math.round(100+shade2*15);
+    X.fillStyle=`rgb(${r2},${g3},${b2})`; X.fillRect(sx,sy,TW,TW);
+    // Subtle disturbed-sand cross marks
+    X.fillStyle='rgba(160,120,60,0.4)';
+    X.fillRect(sx+6,sy+2,2,TW-4); X.fillRect(sx+2,sy+6,TW-4,2);
+    // Faint shimmer if detector equipped
+    if(G.inventory.metalDetector){
+      const det=0.2+0.15*Math.abs(Math.sin(G.tick*0.12+tx*1.1+ty*0.8));
+      X.fillStyle=`rgba(255,220,60,${det})`;
+      X.fillRect(sx+4,sy+4,TW-8,TW-8);
+    }
     return;
   }
   if(tile===53){ // Dune rock
@@ -5649,6 +6134,10 @@ function drawBag(){
     {key:'cocoon',         label:'Cocoon',            qty:inv.cocoon||0,         desc:`Walk 1000 steps to hatch\ninto a MONARCH.\nSteps: ${inv.cocoonSteps||0}/1000`,   hasIt:(inv.cocoon||0)>0},
     {key:'silkCocoon',     label:'Silk Cocoon',       qty:inv.silkCocoon||0,     desc:`Walk 1000 steps to hatch\ninto a SILK MOTH.\nSteps: ${inv.silkCocoonSteps||0}/1000`,hasIt:(inv.silkCocoon||0)>0},
     {key:'igBean',         label:'Intergalactic Bean', qty:inv.igBean||0,         desc:`Walk 1679 steps to hatch\ninto a BEAN MOTH.\nSteps: ${inv.igBeanSteps||0}/1679`,     hasIt:(inv.igBean||0)>0},
+    {key:'strangeMetal',   label:'Strange Metal',      qty:inv.strangeMetal||0,   desc:'Metallic fragments from\nthe crashed ship.',                                          hasIt:(inv.strangeMetal||0)>0},
+    {key:'wire',           label:'Salvage Wire',       qty:inv.wire||0,           desc:'Wiring recovered from\nthe wreckage.',                                                hasIt:(inv.wire||0)>0},
+    {key:'antiGravGen',    label:'Anti-Grav Generator',qty:inv.antiGravGen||0,    desc:'A compact device that\nseems to defy physics.',                                       hasIt:(inv.antiGravGen||0)>0},
+    {key:'strangeOrb',     label:'Strange Orb',        qty:inv.strangeOrb||0,     desc:'Glows faintly. Origin\ncompletely unknown.',                                          hasIt:(inv.strangeOrb||0)>0},
     {key:'shinyRock',      label:'Shiny Rock',        qty:inv.shinyRock||0,      desc:'A smooth glittery rock.',                                                       hasIt:(inv.shinyRock||0)>0},
     {key:'scrapMetal',     label:'Scrap Metal',       qty:inv.scrapMetal||0,     desc:'Rusted metal bits from the pond.',                                              hasIt:(inv.scrapMetal||0)>0},
   ].filter(it => it.hasIt);
@@ -6083,6 +6572,30 @@ function initSudokuIfNeeded(){
   if(G.sudoku.armed===undefined) G.sudoku.armed=0;
 }
 
+function sudokuPlace(r, c, sym1){
+  // sym1 = 1-indexed symbol value
+  const sd = G.sudoku;
+  if(!sd || SUDOKU_GIVEN[r][c]) return;
+  if(sym1 === 0){ sd.board[r][c] = 0; return; } // clear
+
+  const correct = SUDOKU_SOLVED[r][c];
+  if(sym1 === correct){
+    sd.board[r][c] = sym1;
+    // Check win
+    if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
+  } else {
+    // Wrong — flash red on cell, count strike
+    sd.board[r][c] = sym1; // show it briefly
+    sd.failFlash = {r, c, timer: 50};
+    sd.fails = (sd.fails||0) + 1;
+    sfx&&sfx('buff'); // use a buzzy sound
+    if(sd.fails >= 3){
+      // 3 strikes — reset after flash
+      sd.failFlash.reset = true;
+    }
+  }
+}
+
 function sudokuCheck(){
   const b=G.sudoku.board;
   for(let r=0;r<9;r++) for(let c=0;c<9;c++) if(b[r][c]!==SUDOKU_SOLVED[r][c]) return false;
@@ -6184,6 +6697,57 @@ function drawAlienSudoku(){
     X.beginPath(); X.moveTo(GOFF_X,GOFF_Y+i*CELL); X.lineTo(GOFF_X+9*CELL,GOFF_Y+i*CELL); X.stroke();
   }
 
+  // ── Fail flash ──
+  if(sd.failFlash){
+    const ff=sd.failFlash;
+    ff.timer--;
+    const prog=ff.timer/50; // 1→0
+    // Red flash on the wrong cell
+    const fx=GOFF_X+ff.c*CELL, fy=GOFF_Y+ff.r*CELL;
+    X.fillStyle=`rgba(255,60,60,${prog*0.7})`;
+    X.fillRect(fx+1,fy+1,CELL-2,CELL-2);
+    // Screen-wide red pulse
+    X.fillStyle=`rgba(255,0,0,${prog*0.12})`;
+    X.fillRect(0,0,GAME_W,GAME_H);
+
+    // Strike counter
+    const strikes=sd.fails||0;
+    T('✗'.repeat(strikes)+'○'.repeat(3-strikes), GOFF_X+9*CELL, GOFF_Y-6, 8, '#ff4060', 'right');
+
+    if(ff.timer<=0){
+      // Remove wrong symbol
+      sd.board[ff.r][ff.c]=0;
+      if(ff.reset){
+        // 3 fails — reset board
+        const board=SUDOKU_GIVEN.map((row,r)=>row.map((given,c)=>given?SUDOKU_SOLVED[r][c]:0));
+        sd.board=board;
+        sd.fails=0;
+        sd.sel=[4,4];
+        sd.resetMsg={timer:240};
+      }
+      sd.failFlash=null;
+    }
+  } else if(sd.fails>0 && !sd.failFlash){
+    // Always show strike count
+    const strikes=sd.fails||0;
+    T('✗'.repeat(strikes)+'○'.repeat(3-strikes), GOFF_X+9*CELL, GOFF_Y-6, 8, '#ff6080', 'right');
+  }
+
+  // ── Board reset message ──
+  if(sd.resetMsg){
+    sd.resetMsg.timer--;
+    const alpha=Math.min(1, sd.resetMsg.timer/40);
+    X.fillStyle=`rgba(5,5,20,${0.82*alpha})`; X.fillRect(60,150,360,100);
+    X.strokeStyle=`rgba(80,160,255,${alpha})`; X.lineWidth=2; X.strokeRect(60,150,360,100);
+    X.globalAlpha=alpha;
+    T('THE MACHINE MAKES A LOW HUM.',240,186,6,'#60c8ff','center');
+    T('"YOUR ERRORS HAVE BEEN ABSORBED',240,206,5,'#a0d0ff','center');
+    T('INTO THE COLLECTIVE."',240,220,5,'#a0d0ff','center');
+    T('The board resets.',240,240,5,'#6080a0','center');
+    X.globalAlpha=1;
+    if(sd.resetMsg.timer<=0) sd.resetMsg=null;
+  }
+
   // ── Symbol palette ──
   const PAL_Y=372, PAL_W=38, PAL_H=32, PAL_GAP=4;
   const PAL_TOTAL=9*(PAL_W+PAL_GAP)-PAL_GAP;
@@ -6205,11 +6769,9 @@ function drawAlienSudoku(){
     const captured_i=i;
     G.buttons.push({x:px,y:PAL_Y,w:PAL_W,h:PAL_H,label:'sp_'+i,action:()=>{
       sd.armed=captured_i;
-      // Also place in selected cell if one is selected
       if(sd.sel&&!SUDOKU_GIVEN[sd.sel[0]][sd.sel[1]]){
         const[r,c]=sd.sel;
-        sd.board[r][c]=(sd.board[r][c]===captured_i+1)?0:captured_i+1;
-        if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
+        sudokuPlace(r, c, captured_i+1);
       }
     }});
   }
@@ -6267,6 +6829,7 @@ function loop(){
     case 'reward':  drawReward(); break;
     case 'alienSudoku': drawAlienSudoku(); break;
     case 'sudokuCrash': drawSudokuCrash(); break;
+    case 'truckCutscene': drawTruckCutscene(); break;
     case 'gear':    drawGear();   break;
     case 'bag':     drawBag();    break;
     case 'hatch':   drawHatch();  break;
@@ -6453,11 +7016,7 @@ setupBtn('btn-a',()=>{
   if(G.screen==='alienSudoku'){
     const sd=G.sudoku; if(!sd||!sd.sel) return;
     const[r,c]=sd.sel;
-    if(!SUDOKU_GIVEN[r][c]){
-      const newVal=(sd.board[r][c]===sd.armed+1)?0:sd.armed+1;
-      sd.board[r][c]=newVal;
-      if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
-    }
+    sudokuPlace(r, c, sd.armed+1);
     return;
   }
   // Dismiss any popup message first
@@ -6484,11 +7043,7 @@ setupBtn('btn-z',()=>{
   if(G.screen==='alienSudoku'){
     const sd=G.sudoku; if(!sd||!sd.sel) return;
     const[r,c]=sd.sel;
-    if(!SUDOKU_GIVEN[r][c]){
-      const newVal=(sd.board[r][c]===sd.armed+1)?0:sd.armed+1;
-      sd.board[r][c]=newVal;
-      if(sudokuCheck()){ sd.done=true; startSudokuCrash(); sfx&&sfx('levelup'); }
-    }
+    sudokuPlace(r, c, sd.armed+1);
     return;
   }
   if(G.screen==='world') doZAction();
@@ -9162,6 +9717,8 @@ const EDITOR_ZONES=[
   {id:'pc',       label:'Entomology Dept'},
   {id:'spaceship',label:'Out of This World'},
   {id:'wreckage', label:'The Wreckage'},
+  {id:'newtown',  label:'Scattered Rock'},
+  {id:'felixlab', label:"Felix's Lab"},
 ];
 
 const EDITOR_TILES=[
@@ -9194,12 +9751,20 @@ const EDITOR_TILES=[
   {v:46, label:'Chair Back',    solid:true, enc:false},
   {v:47, label:'Chair Seat',    solid:false,enc:false},
   {v:48, label:'Flask Table',   solid:true, enc:false},
-  {v:49, label:'Sudoku Terminal',solid:true,enc:false},
+  {v:54, label:'Bug Portal',       solid:true, enc:false},
+  {v:55, label:'Dig Spot',         solid:false,enc:false},
   // Wreckage tiles
-  {v:50, label:'Encounter Sand', solid:false,enc:true},
-  {v:51, label:'Ship Hull',      solid:true, enc:false},
-  {v:52, label:'Smoking Debris', solid:true, enc:false},
-  {v:53, label:'Dune Rock',      solid:true, enc:false},
+  {v:50, label:'Encounter Sand',   solid:false,enc:true},
+  {v:51, label:'Ship Hull',        solid:true, enc:false},
+  {v:52, label:'Smoking Debris',   solid:true, enc:false},
+  {v:53, label:'Dune Rock',        solid:true, enc:false},
+  {v:56, label:'City Road',        solid:false,enc:false},
+  {v:57, label:'Pavement',         solid:false,enc:false},
+  {v:58, label:'Building Wall',    solid:true, enc:false},
+  {v:59, label:'Lab Door',         solid:false,enc:false},
+  {v:60, label:'Lab Floor',        solid:false,enc:false},
+  {v:61, label:'Lab Bench',        solid:true, enc:false},
+  {v:62, label:'Lab Exit',         solid:false,enc:false},
 ];
 
 const CUSTOM_TILE_BASE=100;
@@ -9245,6 +9810,9 @@ function edTileSwatch(tileV, zoneId){
   for(let dy=0;dy<3;dy++) for(let dx=0;dx<3;dx++){
     try{
       if(zoneId==='spaceship') drawTileSpaceship(tileV,dx*TW,dy*TW,dx,dy);
+      else if(zoneId==='wreckage') drawTileWreckage(tileV,dx*TW,dy*TW,dx,dy);
+      else if(zoneId==='newtown') drawTileNewtown(tileV,dx*TW,dy*TW,dx,dy);
+      else if(zoneId==='felixlab') drawTileFelixLab(tileV,dx*TW,dy*TW,dx,dy);
       else drawTile(tileV,dx*TW,dy*TW,dx,dy);
     }catch(e){}
   }
@@ -9783,6 +10351,9 @@ function edRender(){
       const t=map[ty][tx];
       try{
         if(ED.zone==='spaceship') drawTileSpaceship(t,sx,sy,tx,ty);
+        else if(ED.zone==='wreckage') drawTileWreckage(t,sx,sy,tx,ty);
+        else if(ED.zone==='newtown') drawTileNewtown(t,sx,sy,tx,ty);
+        else if(ED.zone==='felixlab') drawTileFelixLab(t,sx,sy,tx,ty);
         else drawTile(t,sx,sy,tx,ty);
       }catch(e){}
       if(t>=CUSTOM_TILE_BASE){
@@ -10484,7 +11055,7 @@ function edWarpToZone(zid, mode){
     else G.unlockedZones=new Set([1,2,3,'high','hive','shrine']);
   }
 
-  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20},wreckage:{x:14,y:15}};
+  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20},wreckage:{x:14,y:15},newtown:{x:14,y:16},felixlab:{x:14,y:20}};
   const sp=spawns[zid]||{x:14,y:14};
   G.zone=zid;
   G.prevZone=typeof zid==='number'?zid:1;
@@ -10501,7 +11072,7 @@ function edWarpToZone(zid, mode){
 // ── Download ──
 function downloadEditor(){
   const mapData={};
-  [1,2,3,'high','hive','pc','spaceship','wreckage'].forEach(z=>{
+  [1,2,3,'high','hive','pc','spaceship','wreckage','newtown','felixlab'].forEach(z=>{
     if(MAPS[z]) mapData[z]=Array.from(MAPS[z]).map(row=>Array.from(row));
   });
   const src=document.documentElement.outerHTML;
