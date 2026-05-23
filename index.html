@@ -275,7 +275,7 @@ const G={
   introPhase:0, introIdx:0, introCharIdx:0, introTimer:0,
   pcMsg:'', pcMsgTimer:0,
   // Inventory items
-  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, honey:0, madHoney:0, igBean:0, igBeanSteps:0, metalDetector:false, strangeMetal:0, wire:0, antiGravGen:0, strangeOrb:0},
+  inventory:{lakeRake:false, lakeWeed:0, shinyRock:0, scrapMetal:0, specialMushroom:0, wildFruit:0, cocoon:0, cocoonSteps:0, silkCocoon:0, silkCocoonSteps:0, honey:0, madHoney:0, igBean:0, igBeanSteps:0, digScroll:false, strangeMetal:0, wire:0, antiGravGen:0, strangeOrb:0},
   beeNestTrees:{checked:{}},
   // Rake system
   rake:{
@@ -355,7 +355,7 @@ const BUGS={
   velvetant:{name:'VELVET ANT',     type:'BEETLE', hp:50,atk:20,def:12,spd:14,zone:'wreckage', moves:['Sting','Lunge','Toxic Shell','Bite']},
   darkbeetle:{name:'DARKLING BEETLE',type:'BEETLE',hp:56,atk:14,def:20,spd:6, zone:'wreckage', moves:['Armour Up','Bash','Shell Break','Guard']},
   desertant: {name:'DESERT ANT',    type:'BEETLE', hp:38,atk:15,def:10,spd:20,zone:'wreckage', moves:['Bite','Quick Dart','Lunge','Iron Carapace']},
-  antlion:   {name:'ANTLION',       type:'MOLD',   hp:60,atk:22,def:14,spd:10,zone:'wreckage', trainerOnly:true, moves:['Sand Trap','Jaw Snap','Dig','Smother']},
+  antlion:   {name:'ANTLION',       type:'MOLD',   hp:60,atk:22,def:14,spd:10,zone:'wreckage', trainerOnly:true, moves:['Sand Trap','Jaw Snap','Root Snare','Smother']},
 };
 // ── TYPE CHART: t in TYPE_BEATS[T] means a T-typed move does 1.5x to t-typed bugs
 const TYPE_BEATS={BEETLE:'MOLD',MOLD:'AQUATIC',AQUATIC:'FLYING',FLYING:'BEETLE'};
@@ -642,6 +642,7 @@ function getSaveData(){
     alienActive:  !!(G.alien && G.alien.active),
     alienPhase:   G.alien ? G.alien.phase : null,
     wreckageFound: G.wreckageFound||{},
+    dugTiles: G.dugTiles||{},
     scientistSpawned: !!G.scientistSpawned,
   };
 }
@@ -703,9 +704,25 @@ function loadFromSlot(n){
     G.bugdexScroll = d.bugdexScroll || 0;
     G.loadoutScroll = d.loadoutScroll || 0;
     G.wreckageFound = d.wreckageFound || {};
+    G.dugTiles = d.dugTiles || {};
     G.scientistSpawned = !!d.scientistSpawned;
     if(G.scientistSpawned){
       G.scientist=G.scientist||{x:9*TW,y:13*TW,dir:1,arrived:true,talked:true};
+    }
+    // Rebuild dug tile marks — both treasure spots and plain digs
+    if(Object.keys(G.dugTiles).length>0){
+      const wm=getMap('wreckage');
+      Object.keys(G.dugTiles).forEach(key=>{
+        const [tx2,ty2]=key.split(',').map(Number);
+        if(tx2>=0&&tx2<WIDE&&ty2>=0&&ty2<TALL) wm[ty2][tx2]=56;
+      });
+    }
+    // Also mark treasure spots that were found (in case dugTiles wasn't populated from older save)
+    if(Object.keys(G.wreckageFound).length>0){
+      const wm=getMap('wreckage');
+      WRECKAGE_DIG_SPOTS.forEach(s=>{
+        if(G.wreckageFound[s.key]) wm[s.ty][s.tx]=56;
+      });
     }
     G.holder = {partyIndex:0,partyScroll:0,storageScroll:0,msg:''};
     G.keys = {};
@@ -3773,12 +3790,13 @@ function doZAction(allowRake=true){
     return;
   }
 
-  // Wreckage — check facing tile first, then metal detect as fallback
+  // Wreckage — dig the FACING tile; all sand is diggable unless an NPC is there
   if(G.zone==='wreckage'){
     const dirs2=[[0,-1],[1,0],[0,1],[-1,0]];
     const[ddx2,ddy2]=dirs2[p.dir]||[0,1];
-    const ftile2=gt('wreckage',tx+ddx2,ty+ddy2);
-    // Bug portal — always takes priority
+    const ftx=tx+ddx2, fty=ty+ddy2;
+    const ftile2=gt('wreckage',ftx,fty);
+    // Bug portal
     if(ftile2===54){
       G.pcMsg='BUG PORTAL:\n"Must\'ve been in the\nship when it crashed.\nStill works though."';
       G.pcMsgTimer=200;
@@ -3791,10 +3809,11 @@ function doZAction(allowRake=true){
     }
     // NPC battle
     if(interactWithFacingNPC())return;
-    // Metal detect — only if nothing else to interact with
-    const curTile=gt('wreckage',tx,ty);
-    if(G.inventory.metalDetector&&(curTile===50||curTile===55)){
-      doMetalDetectDig(); return;
+    // Dig facing tile — any sand, no NPC standing there
+    const isSand=ftile2===0||ftile2===50||ftile2===55||ftile2===56;
+    const facingNPC=getNPCAt('wreckage',ftx,fty);
+    if(hasBugWithDig()&&isSand&&!facingNPC){
+      doMetalDetectDig(ftx,fty); return;
     }
     return;
   }
@@ -3857,7 +3876,18 @@ function interactWithFacingNPC(){
   if(npc.isPig){talkToPig(npc);return true;}
   if(npc.isTrader){talkToBoatman(npc);return true;}
   if(npc.isQueen){interactHiveShrine();return true;}
-  if(!npc.defeated){triggerTrainerBattle(npc);return true;}
+  if(!npc.defeated){
+    // Dynamic wreckage reward — first beaten gets antlion, second gets scroll
+    if(npc.zone==='wreckage' && !npc.isCamelMan){
+      const beaten=NPCS.filter(n=>n.zone==='wreckage'&&n.defeated&&!n.isCamelMan).length;
+      if(beaten===0){
+        npc.rewardId='antlion'; npc.itemReward=null;
+      } else {
+        npc.rewardId=null; npc.itemReward='digScroll';
+      }
+    }
+    triggerTrainerBattle(npc);return true;
+  }
   // Post-defeat wreckage NPCs
   if(npc.zone==='wreckage'){
     if(npc.itemReward==='metalDetector'&&!G.inventory.metalDetector){
@@ -3887,13 +3917,11 @@ function openTrainerReward(){
     return;
   }
   if(G.battle&&G.battle.trainer) G.battle.trainer.npc.defeated=true;
-  // Check for item rewards (e.g. metal detector from Dune Scout Zara)
-  if(G.battle&&G.battle.trainer&&G.battle.trainer.npc.itemReward==='metalDetector'&&!G.inventory.metalDetector){
+  if(G.battle&&G.battle.trainer&&G.battle.trainer.npc.itemReward==='digScroll'&&!G.inventory.digScroll){
     G.battle.trainer.npc.itemReward=null;
     G.battlePhase='over';
     G.battleMsg=G.battle.trainer.name+' was defeated!';
-    // Queue item reward after battle ends
-    G._pendingMetalDetector=true;
+    G._pendingDigScroll=true;
     return;
   }
   G.battlePhase='over';
@@ -3909,10 +3937,8 @@ function endBattle(){
   checkUnlocks();
   if(beatNpc)autoSave();
   // Give metal detector after battle screen closes
-  if(G._pendingMetalDetector){
-    G._pendingMetalDetector=false;
-    setTimeout(()=>giveMetalDetector(),100);
-  }
+  if(G._pendingMetalDetector){ G._pendingMetalDetector=false; setTimeout(()=>giveDigScroll(),100); }
+  if(G._pendingDigScroll){ G._pendingDigScroll=false; setTimeout(()=>giveDigScroll(),100); }
 }
 function checkUnlocks(){
   // Always use prevZone — G.zone is 'battle' during combat
@@ -5048,61 +5074,87 @@ function finishReturnToEarth(){
 
 // Each dig spot: tx/ty in wreckage map, what it contains, key for "found" tracking
 const WRECKAGE_DIG_SPOTS = [
-  // strangeMetal (10)
-  {tx:4, ty:5,  loot:'strangeMetal', key:'dig_4_5'},
-  {tx:7, ty:11, loot:'strangeMetal', key:'dig_7_11'},
-  {tx:10,ty:15, loot:'strangeMetal', key:'dig_10_15'},
-  {tx:19,ty:6,  loot:'strangeMetal', key:'dig_19_6'},
-  {tx:23,ty:9,  loot:'strangeMetal', key:'dig_23_9'},
-  {tx:25,ty:14, loot:'strangeMetal', key:'dig_25_14'},
-  {tx:3, ty:20, loot:'strangeMetal', key:'dig_3_20'},
-  {tx:11,ty:22, loot:'strangeMetal', key:'dig_11_22'},
-  {tx:21,ty:21, loot:'strangeMetal', key:'dig_21_21'},
-  {tx:26,ty:19, loot:'strangeMetal', key:'dig_26_19'},
-  // wire (8)
-  {tx:5, ty:8,  loot:'wire', key:'dig_5_8'},
-  {tx:12,ty:12, loot:'wire', key:'dig_12_12'},
-  {tx:17,ty:9,  loot:'wire', key:'dig_17_9'},
-  {tx:22,ty:16, loot:'wire', key:'dig_22_16'},
-  {tx:6, ty:17, loot:'wire', key:'dig_6_17'},
-  {tx:18,ty:22, loot:'wire', key:'dig_18_22'},
-  {tx:25,ty:22, loot:'wire', key:'dig_25_22'},
-  {tx:3, ty:10, loot:'wire', key:'dig_3_10'},
-  // antiGravGen (1)
-  {tx:15,ty:19, loot:'antiGravGen', key:'dig_15_19'},
-  // strangeOrb (3)
-  {tx:8, ty:24, loot:'strangeOrb', key:'dig_8_24'},
-  {tx:20,ty:11, loot:'strangeOrb', key:'dig_20_11'},
-  {tx:13,ty:7,  loot:'strangeOrb', key:'dig_13_7'},
+  // strangeMetal (10) — around the ship hull perimeter
+  {tx:7,  ty:9,  loot:'strangeMetal', key:'dig_7_9'},
+  {tx:6,  ty:10, loot:'strangeMetal', key:'dig_6_10'},
+  {tx:5,  ty:7,  loot:'strangeMetal', key:'dig_5_7'},
+  {tx:23, ty:9,  loot:'strangeMetal', key:'dig_23_9'},
+  {tx:24, ty:10, loot:'strangeMetal', key:'dig_24_10'},
+  {tx:23, ty:7,  loot:'strangeMetal', key:'dig_23_7'},
+  {tx:11, ty:9,  loot:'strangeMetal', key:'dig_11_9'},
+  {tx:12, ty:10, loot:'strangeMetal', key:'dig_12_10'},
+  {tx:17, ty:9,  loot:'strangeMetal', key:'dig_17_9'},
+  {tx:19, ty:10, loot:'strangeMetal', key:'dig_19_10'},
+  // wire (8) — in the debris scatter zone
+  {tx:8,  ty:11, loot:'wire', key:'dig_8_11'},
+  {tx:10, ty:12, loot:'wire', key:'dig_10_12'},
+  {tx:12, ty:11, loot:'wire', key:'dig_12_11'},
+  {tx:14, ty:12, loot:'wire', key:'dig_14_12'},
+  {tx:16, ty:11, loot:'wire', key:'dig_16_11'},
+  {tx:18, ty:12, loot:'wire', key:'dig_18_12'},
+  {tx:20, ty:11, loot:'wire', key:'dig_20_11'},
+  {tx:21, ty:10, loot:'wire', key:'dig_21_10'},
+  // antiGravGen (1) — buried right in the middle
+  {tx:14, ty:10, loot:'antiGravGen', key:'dig_14_10'},
+  // strangeOrb (3) — hidden at the sides of the hull
+  {tx:6,  ty:8,  loot:'strangeOrb', key:'dig_6_8'},
+  {tx:22, ty:8,  loot:'strangeOrb', key:'dig_22_8'},
+  {tx:13, ty:11, loot:'strangeOrb', key:'dig_13_11'},
 ];
 
 const LOOT_LABELS={strangeMetal:'Strange Metal',wire:'Salvage Wire',antiGravGen:'Anti-Grav Generator',strangeOrb:'Strange Orb'};
-const TOTAL_PIECES=22; // 10+8+1+3
+const TOTAL_PIECES=12; // 5+4+1+2 required by scientist
 
 function totalPiecesFound(){
   const inv=G.inventory;
-  return (inv.strangeMetal||0)+(inv.wire||0)+(inv.antiGravGen||0)+(inv.strangeOrb||0);
+  // Only count up to the required amounts
+  return Math.min(inv.strangeMetal||0,5)+Math.min(inv.wire||0,4)+Math.min(inv.antiGravGen||0,1)+Math.min(inv.strangeOrb||0,2);
 }
 
-function doMetalDetectDig(){
-  const p=G.player;
-  const tx=Math.round(p.x/TW), ty=Math.round(p.y/TW);
-  if(!G.inventory.metalDetector){ G.pcMsg='You need a\nmetal detector\nfor this.'; G.pcMsgTimer=160; return; }
-  const spot=WRECKAGE_DIG_SPOTS.find(s=>s.tx===tx&&s.ty===ty);
-  if(!spot){ G.pcMsg='The detector hums...\nNothing here.'; G.pcMsgTimer=160; return; }
-  if(G.wreckageFound&&G.wreckageFound[spot.key]){
-    G.pcMsg='Already dug here.\nNothing left.'; G.pcMsgTimer=160; return;
+function hasBugWithDig(){
+  return G.loadout.slice(0,6).some(inst=>{
+    const moves=inst.moves&&inst.moves.length?inst.moves:BUGS[inst.id].moves.slice(0,4);
+    return moves.includes('Dig');
+  });
+}
+
+function doMetalDetectDig(ftx, fty){
+  if(!hasBugWithDig()){ G.pcMsg='None of your bugs\nknow DIG yet.\nGet the DIG SCROLL\nfrom a Wreckage\ntrainer.'; G.pcMsgTimer=220; return; }
+  const digBug=G.loadout.slice(0,6).find(inst=>{
+    const moves=inst.moves&&inst.moves.length?inst.moves:BUGS[inst.id].moves.slice(0,4);
+    return moves.includes('Dig');
+  });
+  const bugName=digBug?(digBug.nickname||BUGS[digBug.id].name):'Your bug';
+
+  // Always mark the tile as dug (dark brown) regardless of what's found
+  getMap('wreckage')[fty][ftx]=56;
+  G.dugTiles=G.dugTiles||{};
+  G.dugTiles[ftx+','+fty]=true;
+
+  const firstDig=!G.scientistSpawned;
+  const spot=WRECKAGE_DIG_SPOTS.find(s=>s.tx===ftx&&s.ty===fty);
+
+  if(!spot){
+    G.pcMsg=`${bugName} used DIG...\nNothing here.`;
+    G.pcMsgTimer=160;
+    sfx&&sfx('catch');
+    if(firstDig) spawnScientist();
+    autoSave();
+    return;
   }
-  // First dig ever — trigger scientist
-  const firstDig=!G.wreckageFound||Object.keys(G.wreckageFound).length===0;
+
+  if(G.wreckageFound&&G.wreckageFound[spot.key]){
+    G.pcMsg=`${bugName} used DIG...\nAlready dug here.\nNothing left.`;
+    G.pcMsgTimer=160;
+    return;
+  }
+
   G.wreckageFound=G.wreckageFound||{};
   G.wreckageFound[spot.key]=true;
   G.inventory[spot.loot]=(G.inventory[spot.loot]||0)+1;
-  // Replace tile with plain sand (mark as dug)
-  if(MAPS['wreckage']) MAPS['wreckage'][ty][tx]=0;
   sfx&&sfx('catch');
-  G.pcMsg=`The detector beeps!\nYou dig up:\n${LOOT_LABELS[spot.loot]}!\n(${totalPiecesFound()}/${TOTAL_PIECES} found)`;
-  G.pcMsgTimer=240;
+  G.pcMsg=`${bugName} used DIG!\nFound: ${LOOT_LABELS[spot.loot]}!`;
+  G.pcMsgTimer=220;
   if(firstDig) spawnScientist();
   autoSave();
 }
@@ -5191,16 +5243,18 @@ function drawScientistNPC(camX,camY){
 
 function talkToScientist(){
   const inv=G.inventory;
-  const total=totalPiecesFound();
-  const sm=inv.strangeMetal||0, wi=inv.wire||0, ag=inv.antiGravGen||0, so=inv.strangeOrb||0;
+  const sm=Math.min(inv.strangeMetal||0,5);
+  const wi=Math.min(inv.wire||0,4);
+  const ag=Math.min(inv.antiGravGen||0,1);
+  const so=Math.min(inv.strangeOrb||0,2);
+  const total=sm+wi+ag+so;
   if(total>=TOTAL_PIECES){
-    // All collected — trigger truck cutscene
     G.pcMsg='DR. FELIX OKAFOR:\n"This is everything.\nIncredible. My truck\nis just over that dune.\nHop in — I need to\nshow you my lab."';
     G.pcMsgTimer=320;
     G._truckCutscenePending=true;
     return;
   }
-  const need=`Metal:${10-sm} Wire:${8-wi}\nAnti-Grav:${1-ag} Orbs:${3-so}`;
+  const need=`Metal:${5-sm} Wire:${4-wi}\nAnti-Grav:${1-ag} Orbs:${2-so}`;
   G.pcMsg=`DR. FELIX OKAFOR:\n"${total}/${TOTAL_PIECES} pieces!\nKeep scanning —\nyou still need:\n${need}"`;
   G.pcMsgTimer=300;
 }
@@ -5526,20 +5580,33 @@ function drawTileWreckage(tile,sx,sy,tx,ty){
     X.fillText('BUG', sx+TW/2, sy+TW-3); X.textAlign='left';
     return;
   }
-  if(tile===55){ // Metal detect spot — slightly disturbed sand
-    // Base sand
+  if(tile===55){ // Metal detect spot — looks like regular sand (no visual hint)
     const shade2=(Math.sin(tx*0.4+ty*0.3)*0.06+Math.cos(tx*0.7-ty*0.5)*0.04);
     const r2=Math.round(210+shade2*30), g3=Math.round(178+shade2*20), b2=Math.round(100+shade2*15);
     X.fillStyle=`rgb(${r2},${g3},${b2})`; X.fillRect(sx,sy,TW,TW);
-    // Subtle disturbed-sand cross marks
-    X.fillStyle='rgba(160,120,60,0.4)';
-    X.fillRect(sx+6,sy+2,2,TW-4); X.fillRect(sx+2,sy+6,TW-4,2);
-    // Faint shimmer if detector equipped
-    if(G.inventory.metalDetector){
-      const det=0.2+0.15*Math.abs(Math.sin(G.tick*0.12+tx*1.1+ty*0.8));
-      X.fillStyle=`rgba(255,220,60,${det})`;
-      X.fillRect(sx+4,sy+4,TW-8,TW-8);
+    // Same ripple as normal sand — no special markings
+    if((tx+ty)%3===0){
+      X.fillStyle='rgba(255,230,160,0.25)';
+      X.fillRect(sx+2,sy+4,TW-4,2);
+      X.fillRect(sx+1,sy+10,TW-2,2);
     }
+    return;
+  }
+  if(tile===56){ // Dug sand — clearly disturbed, permanent
+    // Dark base — obviously different from surrounding sand
+    X.fillStyle='#6b3d10'; X.fillRect(sx,sy,TW,TW);
+    // Loose dirt fill
+    X.fillStyle='#7a4518'; X.fillRect(sx+2,sy+2,TW-4,TW-4);
+    // Centre hole — very dark
+    X.fillStyle='#2a1408'; X.fillRect(sx+4,sy+4,TW-8,TW-8);
+    // Dirt rim highlight (lighter edge around hole)
+    X.fillStyle='#8a5520';
+    X.fillRect(sx+3,sy+3,TW-6,2);
+    X.fillRect(sx+3,sy+3,2,TW-6);
+    // Scatter of loose clumps
+    X.fillStyle='#5a3010';
+    X.fillRect(sx+1,sy+TW-4,3,3);
+    X.fillRect(sx+TW-4,sy+1,3,3);
     return;
   }
   if(tile===53){ // Dune rock
@@ -5624,10 +5691,12 @@ function talkToCamelMan(npc){
   sfx&&sfx('heal');
 }
 
-// ── Metal detector reward ──
-function giveMetalDetector(){
-  G.inventory.metalDetector=true;
-  G.pendingItemReward={name:'METAL DETECTOR',desc:'Beeps near hidden things.\nMaybe useful someday.'};
+function giveDigScroll(){
+  G.inventory.digScroll=true;
+  G.pendingItemReward={
+    name:'DIG SCROLL',
+    desc:'A scroll with the\nDig technique.\nUse this from your bag\nto teach one of your\nbugs Dig.'
+  };
   G.screen='item_reward';
 }
 
@@ -6134,6 +6203,7 @@ function drawBag(){
     {key:'cocoon',         label:'Cocoon',            qty:inv.cocoon||0,         desc:`Walk 1000 steps to hatch\ninto a MONARCH.\nSteps: ${inv.cocoonSteps||0}/1000`,   hasIt:(inv.cocoon||0)>0},
     {key:'silkCocoon',     label:'Silk Cocoon',       qty:inv.silkCocoon||0,     desc:`Walk 1000 steps to hatch\ninto a SILK MOTH.\nSteps: ${inv.silkCocoonSteps||0}/1000`,hasIt:(inv.silkCocoon||0)>0},
     {key:'igBean',         label:'Intergalactic Bean', qty:inv.igBean||0,         desc:`Walk 1679 steps to hatch\ninto a BEAN MOTH.\nSteps: ${inv.igBeanSteps||0}/1679`,     hasIt:(inv.igBean||0)>0},
+    {key:'digScroll',      label:'Dig Scroll',         qty:inv.digScroll?1:0,     desc:'A scroll with the Dig\ntechnique. Teach it to\na bug in your loadout.',  hasIt:!!inv.digScroll},
     {key:'strangeMetal',   label:'Strange Metal',      qty:inv.strangeMetal||0,   desc:'Metallic fragments from\nthe crashed ship.',                                          hasIt:(inv.strangeMetal||0)>0},
     {key:'wire',           label:'Salvage Wire',       qty:inv.wire||0,           desc:'Wiring recovered from\nthe wreckage.',                                                hasIt:(inv.wire||0)>0},
     {key:'antiGravGen',    label:'Anti-Grav Generator',qty:inv.antiGravGen||0,    desc:'A compact device that\nseems to defy physics.',                                       hasIt:(inv.antiGravGen||0)>0},
@@ -6178,6 +6248,8 @@ function drawBag(){
         BTN(360, iy+30, 100, 22, 'EAT →', ()=>{ eatMysteryTruffle(); });
       if(it.key==='madHoney' && it.qty>0)
         BTN(360, iy+30, 100, 22, 'EAT →', ()=>{ sfx('menu'); G.screen='world'; eatMadHoney(); });
+      if(it.key==='digScroll' && it.qty>0)
+        BTN(360, iy+30, 100, 22, 'USE →', ()=>{ sfx('menu'); G.prevScreen='bag'; G.screen='teachDig'; });
     });
 
     X.restore();
@@ -6824,6 +6896,8 @@ function loop(){
     case 'home_save_confirm': drawHomeSaveConfirm(); break;
     case 'bugdex':  drawBugdex(); break;
     case 'loadout': drawLoadout();break;
+    case 'bugDetail': drawBugDetail();break;
+    case 'teachDig': drawTeachDig();break;
     case 'bug_holder': drawBugHolder();break;
     case 'unlock':  drawUnlock(); break;
     case 'reward':  drawReward(); break;
@@ -8033,9 +8107,9 @@ const NPCS = [
     rewardId:'antlion', defeated:false},
   {zone:'wreckage', tx:21, ty:10, dir:3, sprite:'scout', name:'DUNE SCOUT ZARA',
     intro:"A CRASH LANDING?!\nRight here in my\npatrol zone?! Unreal.",
-    afterMsg:"You fight well.\nTake my detector.",
+    afterMsg:"Found this in the\nsand. It's yours.",
     team:[{id:'dlocust',lvl:13},{id:'antlion',lvl:15},{id:'darkbeetle',lvl:14}],
-    rewardId:null, defeated:false, itemReward:'metalDetector'},
+    rewardId:null, defeated:false, itemReward:'digScroll'},
   {zone:'wreckage', tx:15, ty:20, dir:0, sprite:'hiker', name:'CAMEL MAN JOAD',
     isCamelMan:true, defeated:false,
     intro:"Easy now... you took\na bad fall. Your bugs\nare patched up.\nRest here a while.",
@@ -8307,6 +8381,15 @@ function drawLoadout(){
     X.strokeStyle = inBattle ? '#607040' : '#909888';
     X.lineWidth = 2;
     X.strokeRect(4, y, 472, rowH - 6);
+    // Click card → bug detail (only clickable within visible scroll region)
+    const capturedI = i;
+    const clickY = Math.max(visY, y);
+    const clickBottom = Math.min(visY + visH, y + rowH - 6);
+    if(clickBottom > clickY){
+      G.buttons.push({x:4, y:clickY, w:380, h:clickBottom - clickY, label:'bug_detail_'+i, action:()=>{
+        G.bugDetailIdx=capturedI; G.prevScreen='loadout'; G.screen='bugDetail'; sfx('menu');
+      }});
+    }
     // Sprite box
     X.fillStyle = '#c4d8c0';
     X.fillRect(8, y + 4, 56, rowH - 14);
@@ -8351,6 +8434,181 @@ function drawLoadout(){
   BTN(110, 416, 100, 14, '↑ UP', () => G.loadoutScroll = Math.max(0, G.loadoutScroll - rowH));
   BTN(216, 416, 100, 14, '↓ DOWN', () => G.loadoutScroll += rowH);
   T('Top 6 = battle team', 360, 425, 5, '#9098a8', 'center');
+}
+
+// ── Bug Detail Screen ──
+function drawBugDetail(){
+  const inst=G.loadout[G.bugDetailIdx||0];
+  if(!inst){G.screen=G.prevScreen||'loadout';return;}
+  const b=BUGS[inst.id];
+  const ns=levelStats(inst.id,inst.level);
+  X.fillStyle='#0e1620';X.fillRect(0,0,480,432);
+  panel(0,0,480,30,'#f8f8e8');
+  T(inst.nickname||b.name,240,21,9,'#303848','center');
+  // Sprite
+  X.fillStyle='#c4d8c0';X.fillRect(16,38,100,90);
+  drawBug(X,inst.id,66,90,3.0);
+  // Type + level
+  drawTypeBadge(126,44,b.type);
+  T('Lv. '+inst.level,462,54,9,'#303848','right');
+  if(inst.nickname) T(b.name,126,44+16,5,'#607080');
+  // Stats
+  const statY=68;
+  [['HP',ns.hp],['ATK',ns.atk],['DEF',ns.def],['SPD',ns.spd]].forEach(([label,val],i)=>{
+    const sx=126+(i%2)*170, sy=statY+(Math.floor(i/2))*22;
+    T(label,sx,sy,6,'#607080');
+    T(String(val),sx+36,sy,8,'#303848');
+    // Stat bar
+    const maxStat=80;
+    X.fillStyle='#d0d0c0';X.fillRect(sx+46,sy-8,90,8);
+    X.fillStyle=val>50?'#40a840':val>30?'#a8a040':'#a84040';
+    X.fillRect(sx+46,sy-8,Math.round(90*Math.min(val,maxStat)/maxStat),8);
+  });
+  // HP bar actual
+  T('HP',126,statY+46,6,'#607080');
+  HPBAR(162,statY+41,200,inst.hp,ns.hp);
+  T(inst.hp+'/'+ns.hp,368,statY+46,5,'#506070');
+  // XP
+  const xpMax=xpForLevel(inst.level);
+  T('XP',126,statY+62,6,'#607080');
+  XPBAR(162,statY+57,200,inst.xp,xpMax);
+  T(inst.xp+'/'+xpMax,368,statY+62,4,'#506070');
+  // Moves
+  T('MOVES',16,184,7,'#303848');
+  X.fillStyle='#607040';X.fillRect(16,188,448,2);
+  const moves=inst.moves&&inst.moves.length?inst.moves:b.moves;
+  moves.forEach((mv,mi)=>{
+    const mvData=MOVES[mv]||{p:0,a:1,t:'?'};
+    const mx=16+(mi%2)*234, my=196+Math.floor(mi/2)*52;
+    X.fillStyle='#e8e4d8';X.fillRect(mx,my,226,44);
+    X.strokeStyle='#607040';X.lineWidth=1.5;X.strokeRect(mx,my,226,44);
+    T(mv,mx+8,my+14,7,'#303848');
+    // Type badge for move
+    drawTypeBadge(mx+8,my+20,mvData.t||'?');
+    // Power + accuracy
+    if(mvData.p>0){
+      T('PWR '+mvData.p,mx+70,my+32,5,'#506070');
+      T('ACC '+Math.round(mvData.a*100)+'%',mx+130,my+32,5,'#506070');
+    } else {
+      T('STATUS',mx+70,my+32,5,'#806040');
+    }
+  });
+  if(moves.length===0) T('No moves learned yet.',240,210,6,'#909898','center');
+  BTN(4,414,100,16,'← BACK',()=>{sfx('menu');G.screen=G.prevScreen||'loadout';});
+}
+
+// ── Teach Dig Screen ──
+function drawTeachDig(){
+  X.fillStyle='#0e1620';X.fillRect(0,0,480,432);
+  panel(0,0,480,30,'#f8f8e8');
+
+  // Step 2: bug picked — choose which move to replace
+  if(G._teachDigTarget !== undefined && G._teachDigTarget !== null){
+    const inst = G.loadout[G._teachDigTarget];
+    if(!inst){ G._teachDigTarget=null; return; }
+    const b = BUGS[inst.id];
+    if(!inst.moves || !inst.moves.length) inst.moves = BUGS[inst.id].moves.slice(0,4);
+
+    T(`REPLACE WHICH MOVE?`,240,21,9,'#303848','center');
+    T(`${inst.nickname||b.name} will learn DIG in place of...`,240,42,5,'#909898','center');
+
+    // Show current moves as 4 big buttons
+    for(let i=0; i<4; i++){
+      const mv = inst.moves[i];
+      const mx = 24 + (i%2)*228;
+      const my = 76 + Math.floor(i/2)*120;
+      const w = 216, h = 100;
+      const mvData = mv ? (MOVES[mv]||{p:0,a:1,t:'?'}) : null;
+
+      X.fillStyle = mv ? '#e8e4d8' : '#d8d4c8';
+      X.fillRect(mx, my, w, h);
+      X.strokeStyle = '#607040'; X.lineWidth = 2;
+      X.strokeRect(mx, my, w, h);
+
+      if(mv){
+        T(mv, mx+w/2, my+22, 8, '#303848', 'center');
+        drawTypeBadge(mx+8, my+34, mvData.t||'?');
+        if(mvData.p > 0){
+          T('PWR '+mvData.p, mx+w/2, my+58, 6, '#506070', 'center');
+          T('ACC '+Math.round(mvData.a*100)+'%', mx+w/2, my+74, 6, '#506070', 'center');
+        } else {
+          T('STATUS', mx+w/2, my+58, 6, '#806040', 'center');
+        }
+        T('Tap to replace with DIG', mx+w/2, my+92, 4, '#a06040', 'center');
+      } else {
+        T('Empty slot', mx+w/2, my+44, 6, '#909090', 'center');
+        T('Tap to learn DIG here', mx+w/2, my+62, 5, '#608030', 'center');
+      }
+
+      const capturedI = i, capturedInst = inst;
+      G.buttons.push({x:mx, y:my, w, h, label:'replace_mv_'+i, action:()=>{
+        if(!capturedInst.moves||!capturedInst.moves.length){
+          capturedInst.moves = BUGS[capturedInst.id].moves.slice(0,4);
+        }
+        if(capturedI < capturedInst.moves.length){
+          capturedInst.moves[capturedI] = 'Dig';
+        } else {
+          capturedInst.moves.push('Dig');
+        }
+        G.inventory.digScroll = false;
+        G._teachDigTarget = null;
+        sfx&&sfx('levelup');
+        G.pcMsg = `${capturedInst.nickname||BUGS[capturedInst.id].name} learned DIG!\nUse it on sand in\nThe Wreckage to dig\nfor treasure.`;
+        G.pcMsgTimer = 280;
+        G.screen = 'world';
+        autoSave();
+      }});
+    }
+
+    // Back / cancel buttons
+    BTN(4, 414, 130, 16, '← PICK ANOTHER BUG', ()=>{
+      sfx('menu'); G._teachDigTarget = null;
+    });
+    BTN(360, 414, 116, 16, '✗ CANCEL', ()=>{
+      sfx('menu'); G._teachDigTarget = null; G.screen = G.prevScreen || 'bag';
+    });
+    return;
+  }
+
+  // Step 1: pick a bug to teach
+  T('TEACH DIG TO WHICH BUG?',240,21,9,'#303848','center');
+  T('Then choose which move to replace.',240,38,5,'#909898','center');
+
+  const rowH=58, visY=48, visH=336;
+  X.save(); X.beginPath(); X.rect(0,visY,480,visH); X.clip();
+  G.loadout.forEach((inst,i)=>{
+    const y=visY+4+i*rowH;
+    if(y+rowH<visY||y>visY+visH) return;
+    const b=BUGS[inst.id];
+    const moves=inst.moves&&inst.moves.length?inst.moves:b.moves.slice(0,4);
+    const alreadyKnows=moves.includes('Dig');
+
+    X.fillStyle=alreadyKnows?'#5a4848':'#e8e4d8';
+    X.fillRect(4,y,472,rowH-6);
+    X.strokeStyle=alreadyKnows?'#806060':'#607040'; X.lineWidth=2;
+    X.strokeRect(4,y,472,rowH-6);
+
+    // Sprite box
+    X.fillStyle='#c4d8c0'; X.fillRect(8,y+4,46,rowH-14);
+    drawBug(X,inst.id,31,y+rowH/2-2,1.3);
+
+    T(inst.nickname||b.name, 64, y+14, 7, alreadyKnows?'#a09898':'#303848');
+    T('Lv. '+inst.level, 64, y+28, 5, alreadyKnows?'#807878':'#506070');
+    T('Moves: '+moves.join(', '), 64, y+42, 4, alreadyKnows?'#807878':'#607080');
+
+    if(alreadyKnows){
+      T('ALREADY KNOWS DIG', 462, y+30, 6, '#ff8080', 'right');
+    } else {
+      const capturedI=i;
+      BTN(360,y+18,108,22,'PICK →', ()=>{
+        sfx('menu');
+        G._teachDigTarget = capturedI;
+      });
+    }
+  });
+  X.restore();
+
+  BTN(4,414,100,16,'← BACK',()=>{sfx('menu');G._teachDigTarget=null;G.screen=G.prevScreen||'bag';});
 }
 
 // ═══════════════════════════════════════════════
@@ -8925,7 +9183,7 @@ SFN.fungus = spFungusV2;
 // ═══════════════════════════════════════════════
 Object.assign(BUGS, {
   stinkbug: {name:'STINK BUG',     type:'BEETLE',  hp:50,atk:14,def:14,spd:10,zone:1, trainerOnly:true, moves:['Stink Cloud','Shield Bash','Bite','Lunge']},
-  worm:     {name:'EARTHWORM',     type:'MOLD',    hp:58,atk:12,def:12,spd:6, zone:1, trainerOnly:true, moves:['Wriggle','Dig','Slime Trail','Smother']},
+  worm:     {name:'EARTHWORM',     type:'MOLD',    hp:58,atk:12,def:12,spd:6, zone:1, trainerOnly:true, moves:['Wriggle','Slime Trail','Smother','Root Snare']},
   boatman:  {name:'WATER BOATMAN', type:'AQUATIC', hp:40,atk:13,def:11,spd:18,zone:2, trainerOnly:true, moves:['Row Strike','Dive Bomb','Water Jet','Quick Dart']},
   diver:    {name:'DIVING BEETLE', type:'AQUATIC', hp:52,atk:16,def:14,spd:12,zone:2, trainerOnly:true, moves:['Plunge','Submarine','Surf Slash','Pincer']},
   mayfly:   {name:'MAYFLY',        type:'FLYING',  hp:34,atk:17,def:7, spd:22,zone:3, trainerOnly:true, moves:['Ephemeral','Gust','Flash Burst','Dart']},
