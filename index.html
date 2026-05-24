@@ -418,11 +418,13 @@ function xpForLevel(L){return 8+L*6;} // XP needed to go from L to L+1
 function zoneLevel(z){return z===1?{min:2,max:4}:z===2?{min:4,max:7}:z===3?{min:7,max:10}:z==='high'?{min:10,max:14}:z==='hive'?{min:9,max:13}:z==='shrine'?{min:10,max:14}:{min:2,max:4};}
 function levelStats(id,level){
   const b=BUGS[id], lv=Math.max(1,level||1)-1;
+  // Quadratic scaling: grows faster at high levels, but not insane
+  const scale=lv+(lv*lv*0.018);
   return{
-    hp: b.hp + Math.round(lv*3.0),
-    atk: b.atk + Math.round(lv*1.2),
-    def: b.def + Math.round(lv*0.8),
-    spd: b.spd + Math.round(lv*0.7),
+    hp:  Math.round(b.hp  + scale*3.2),
+    atk: Math.round(b.atk + scale*1.4),
+    def: Math.round(b.def + scale*0.9),
+    spd: Math.round(b.spd + scale*0.7),
   };
 }
 // Create a brand-new caught instance
@@ -1490,7 +1492,7 @@ function gt(z,tx,ty){
   return getMap(z)[ty][tx];
 }
 function resetMap(z){delete MAPS[z];}
-function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43&&t!==46&&t!==48&&t!==49&&t!==51&&t!==52&&t!==53&&t!==54&&t!==58&&t!==61;}
+function walkable(t){return t!==2&&t!==3&&t!==5&&t!==15&&t!==16&&t!==17&&t!==20&&t!==24&&t!==25&&t!==26&&t!==28&&t!==36&&t!==37&&t!==42&&t!==43&&t!==46&&t!==48&&t!==49&&t!==51&&t!==52&&t!==53&&t!==54&&t!==58&&t!==61&&t!==64;}
 function isEncounter(t){return t===1||t===7||t===9||t===27||t===30||t===50;}
 function isWater(t){return t===7;}
 
@@ -2149,7 +2151,7 @@ function drawStarterPick(){
 // ═══════════════════════════════════════════════
 // WORLD DRAW
 // ═══════════════════════════════════════════════
-const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD',wreckage:'THE WRECKAGE',newtown:'SCATTERED ROCK',felixlab:"FELIX'S LAB"};
+const ZN={1:'MOSSY WOODS',2:'MURKY POND',3:'MUSHROOM HOLLOW',high:'HIGH, HIGH, HIGH',pc:'ENTOMOLOGY DEPT',hive:'THE HIVE',shrine:"QUEEN'S SANCTUM",spaceship:'OUT OF THIS WORLD',wreckage:'THE WRECKAGE',newtown:'MUSHI CITY',felixlab:"FELIX'S LAB"};
 
 function snapPlayerToTile(){
   const p=G.player;
@@ -2172,16 +2174,20 @@ function drawWorld(){
   if(G.zone === 'spaceship'){
     if(p.visX===undefined) p.visX=p.x;
     if(p.visY===undefined) p.visY=p.y;
-    const camX=p.visX-240+8, camY=p.visY-216+8;
+    const camX=(p.visX-240+8)|0, camY=(p.visY-216+8)|0;
 
     if(G.moveDelay > 0) G.moveDelay--;
     const visAtTile = Math.abs(p.visX-p.x)<0.5 && Math.abs(p.visY-p.y)<0.5;
     if(visAtTile && G.moveDelay===0){
-      let dx=0,dy=0;
-      if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
-      else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
-      else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;p.dir=3;}
-      else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1;p.dir=1;}
+      let dx=0,dy=0,newDir2=-1;
+      if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;newDir2=0;}
+      else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;newDir2=2;}
+      else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;newDir2=3;}
+      else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1;newDir2=1;}
+      if(newDir2>=0){
+        const turned=(p.dir!==newDir2); p.dir=newDir2;
+        if(turned){dx=0;dy=0;}
+      }
       if(dx||dy){
         const nx=p.x+dx*TW, ny=p.y+dy*TW;
         const tx=Math.round(nx/TW), ty=Math.round(ny/TW);
@@ -2189,7 +2195,7 @@ function drawWorld(){
         if(walkable(tile)){p.x=nx;p.y=ny;}
       }
     }
-    const _spd=1.4;
+    const _spd=2.0;
     const _dx=p.x-p.visX, _dy=p.y-p.visY;
     if(Math.abs(_dx)>0.4) p.visX+=Math.sign(_dx)*Math.min(_spd,Math.abs(_dx)); else p.visX=p.x;
     if(Math.abs(_dy)>0.4) p.visY+=Math.sign(_dy)*Math.min(_spd,Math.abs(_dy)); else p.visY=p.y;
@@ -2271,7 +2277,7 @@ function drawWorld(){
 
   if(p.visX===undefined) p.visX=p.x;
   if(p.visY===undefined) p.visY=p.y;
-  const camX=p.visX-240+8,camY=p.visY-216+8;
+  const camX=(p.visX-240+8)|0, camY=(p.visY-216+8)|0;
 
   // Movement
   // Movement — new step is triggered the moment the visual catches up to the
@@ -2281,12 +2287,20 @@ function drawWorld(){
   if(visAtTile && G.moveDelay === 0 && !G.pig.searching){
     const alienLocked = G.alien && G.alien.active &&
       ['overlay_in','alien_appears','dialog','ship_landing','ship_escort','enter_ship'].includes(G.alien.phase);
-    let dx=0,dy=0;
+    let dx=0,dy=0,newDir=-1;
     if(!alienLocked){
-      if(G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;p.dir=0;}
-      else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1;p.dir=2;}
-      else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;p.dir=3;}
-      else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1;p.dir=1;}
+      if     (G.keys['ArrowUp']   ||G.keys['w']||G.keys['W']){dy=-1;newDir=0;}
+      else if(G.keys['ArrowDown'] ||G.keys['s']||G.keys['S']){dy=1; newDir=2;}
+      else if(G.keys['ArrowLeft'] ||G.keys['a']||G.keys['A']){dx=-1;newDir=3;}
+      else if(G.keys['ArrowRight']||G.keys['d']||G.keys['D']){dx=1; newDir=1;}
+    }
+    if(newDir>=0){
+      p.dir = newDir;
+      const firstPress = (G._dirHeld === 0); // only skip if just started pressing
+      G._dirHeld = (G._dirHeld||0) + 1;
+      if(firstPress){ dx=0; dy=0; } // first frame: face only, don't step
+    } else {
+      G._dirHeld = 0;
     }
     if(dx||dy){
       const nx=p.x+dx*TW,ny=p.y+dy*TW;
@@ -2298,14 +2312,14 @@ function drawWorld(){
       } else if(walkable(tile)){
         p.x=nx;p.y=ny;
         countBugStep();
-        // No moveDelay set on normal walk — next step triggers when visual arrives
         if(isEncounter(tile)&&Math.random()<(tile===50?.065:.13))triggerEnc();
         if(tile===6)doPortal(tx,ty);
-        if(tile===11)enterPC();      // walk into PC door
-        if(tile===12)exitPC();       // walk out of PC
-        if(tile===13)tryTalkDesk();  // interact tile in front of desk
+        if(tile===11)enterPC();
+        if(tile===12)exitPC();
+        if(tile===13)tryTalkDesk();
         if(tile===23)startDreamReturn();
-        // Trainer line-of-sight check after every successful move
+        if(tile===59&&G.zone==='newtown')enterFelixLab();
+        if(tile===62&&G.zone==='felixlab')exitFelixLab();
         if(G.screen==='world') checkNPCLineOfSight();
       }
     }
@@ -2315,11 +2329,11 @@ function drawWorld(){
   G.running = !!(G.keys['Shift'] || G.keys['_run']);
 
   // Linear visual interpolation toward target tile — continuous motion when key held
-  const _spd = G.running ? 2.8 : 1.4; // run = 2× speed
+  const _spd = G.running ? 4.0 : 2.0;
   const _dx = p.x - p.visX, _dy = p.y - p.visY;
-  if(Math.abs(_dx) > 0.4) p.visX += Math.sign(_dx) * Math.min(_spd, Math.abs(_dx));
+  if(Math.abs(_dx) > 0.4) p.visX = Math.round(p.visX + Math.sign(_dx) * Math.min(_spd, Math.abs(_dx)));
   else p.visX = p.x;
-  if(Math.abs(_dy) > 0.4) p.visY += Math.sign(_dy) * Math.min(_spd, Math.abs(_dy));
+  if(Math.abs(_dy) > 0.4) p.visY = Math.round(p.visY + Math.sign(_dy) * Math.min(_spd, Math.abs(_dy)));
   else p.visY = p.y;
   // Tick walk frame continuously while moving
   if(Math.abs(p.visX-p.x)>=0.5 || Math.abs(p.visY-p.y)>=0.5) p.frame++;
@@ -2432,6 +2446,33 @@ function drawWorld(){
     drawCamelSprite(X,cX,cY,1.4);
     updateScientist();
     drawScientistNPC(camX,camY);
+    // Show dig spots in editor test mode
+    if(G.editorTestMode){
+      WRECKAGE_DIG_SPOTS.forEach(s=>{
+        const sx2=s.tx*TW-camX, sy2=s.ty*TW-camY;
+        const pulse=0.5+0.4*Math.abs(Math.sin(G.tick*0.08+s.tx*0.7));
+        X.fillStyle=`rgba(255,200,40,${pulse*0.5})`;
+        X.fillRect(sx2,sy2,TW,TW);
+        X.strokeStyle=`rgba(255,180,20,${pulse*0.9})`;
+        X.lineWidth=1.5;
+        X.strokeRect(sx2+1,sy2+1,TW-2,TW-2);
+        const label=s.loot==='strangeMetal'?'M':s.loot==='wire'?'W':s.loot==='antiGravGen'?'AG':'ORB';
+        X.fillStyle='rgba(255,220,60,0.95)'; X.font='bold 6px monospace'; X.textAlign='center';
+        X.fillText(label, sx2+TW/2, sy2+TW*0.7);
+        X.textAlign='left';
+      });
+    }
+  }
+  if(G.zone==='felixlab'&&G.felixLab){
+    const fl=G.felixLab;
+    drawFelixAt(X, fl.x-camX, fl.y-camY);
+    if(!fl.talked){
+      const ax=fl.x-camX, ay=fl.y-camY-28;
+      const b=Math.floor(G.tick/8)%2*3;
+      X.fillStyle='#ffcc00';
+      X.fillRect(ax-4,ay-b,8,3); X.fillRect(ax-6,ay+3-b,12,3);
+      X.fillRect(ax-3,ay+6-b,6,3); X.fillRect(ax-1,ay+9-b,2,3);
+    }
   }
   // Trigger truck cutscene after dialog
   if(G._truckCutscenePending&&G.pcMsgTimer<=0){
@@ -3197,18 +3238,14 @@ function drawBattle(){
   if(G.btFlashP>0){X.globalAlpha=.3+.7*Math.abs(Math.sin(G.btTick*.35));G.btFlashP--;}
   drawBug(X,me.id,110+anim.px,175+anim.py,3.0,true);X.globalAlpha=1;
   anim.effects.forEach(({a,p})=>{
-    if(!a.hit&&a.kind==='hit')return;
-    const sx=a.isPlayer?150:330, sy=a.isPlayer?160:170;
-    const tx=a.isPlayer?328:142, ty=a.isPlayer?150:176;
-    const x=sx+(tx-sx)*p,y=sy+(ty-sy)*p;
-    X.globalAlpha=Math.max(0,1-p);
-    X.fillStyle=a.type==='AQUATIC'?'#70d8ff':a.type==='FLYING'?'#f8f8ff':a.type==='MOLD'?'#c070ff':a.type==='BEETLE'?'#f0b040':'#ffffff';
-    if(a.kind==='status'){
-      X.strokeStyle=X.fillStyle;X.lineWidth=3;X.beginPath();X.arc(a.isPlayer?110:360,a.isPlayer?175:160,16+p*28,0,Math.PI*2);X.stroke();
-    } else {
-      X.fillRect(x-5,y-5,10,10);X.fillRect(x-2,y-13,4,26);
-    }
-    X.globalAlpha=1;
+    if(!a.hit&&a.kind==='hit') return;
+    const targetX = a.isPlayer ? 360 : 110;
+    const targetY = a.isPlayer ? 160 : 175;
+    const originX = a.isPlayer ? 110 : 360;
+    const originY = a.isPlayer ? 175 : 160;
+    X.save();
+    drawMoveAnimation(X, a.move, a.type, a.kind, p, originX, originY, targetX, targetY, a.isPlayer);
+    X.restore();
   });
 
   // Wild panel — top right (only when bug is on field)
@@ -3482,7 +3519,7 @@ function drawMoveLearn(){
 function startAttackAnim(isPlayer,moveName,moveDef,hit){
   const kind=moveDef&&moveDef.p>0?'hit':'status';
   G.attackAnims=G.attackAnims||[];
-  G.attackAnims.push({timer:0,duration:12,isPlayer,move:moveName,type:(moveDef&&moveDef.t)||'NONE',hit,kind});
+  G.attackAnims.push({timer:0,duration:28,isPlayer,move:moveName,type:(moveDef&&moveDef.t)||'NONE',hit,kind});
 }
 function moveSfx(moveDef,hit,crit){
   if(!hit){sfx('miss');return;}
@@ -3491,6 +3528,183 @@ function moveSfx(moveDef,hit,crit){
   const t=moveDef.t||'NONE';
   sfx(t==='AQUATIC'?'hit_aqua':t==='FLYING'?'hit_air':t==='MOLD'?'hit_mold':t==='BEETLE'?'hit_bug':'hit');
 }
+function drawMoveAnimation(ctx,move,type,kind,p,ox,oy,tx2,ty2,isPlayer){
+  const fx=ox+(tx2-ox)*p, fy=oy+(ty2-oy)*p;
+  const fade=p<0.7?1:1-(p-0.7)/0.3;
+  const tgt={x:tx2,y:ty2}, src={x:ox,y:oy};
+
+  if(/Ember|Fire|Burn|Scorch|Blast|Flame|Flareon/i.test(move)){
+    for(let i=0;i<6;i++){
+      const fp=((p+i/6)%1);
+      const ffx=ox+(tx2-ox)*fp+Math.sin(fp*8+i)*14;
+      const ffy=oy+(ty2-oy)*fp-fp*20;
+      const fr=6+fp*10;
+      ctx.globalAlpha=(1-fp)*fade;
+      ctx.fillStyle='hsl('+(20+fp*40)+',100%,'+(50+fp*20)+'%)';
+      ctx.beginPath();ctx.arc(ffx,ffy,fr,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='rgba(255,200,80,0.6)';
+      ctx.beginPath();ctx.arc(ffx,ffy,fr*0.5,0,Math.PI*2);ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    return;
+  }
+
+  if(/\bDig\b/i.test(move)){
+    const dgY=isPlayer?175:160;
+    if(p<0.4){
+      const dgP=p/0.4;
+      ctx.globalAlpha=1-dgP;
+      for(let i=0;i<5;i++){
+        const da=i*(Math.PI*2/5)+p*4;
+        const dr=10+dgP*20;
+        ctx.fillStyle='rgba(180,140,80,'+(0.6*(1-dgP))+')';
+        ctx.beginPath();ctx.arc(ox+Math.cos(da)*dr,dgY+Math.sin(da)*dr*0.4,5+dgP*8,0,Math.PI*2);ctx.fill();
+      }
+      for(let i=0;i<4;i++){
+        const da=i*(Math.PI/2)+0.5;
+        ctx.fillStyle='rgba(140,100,50,0.8)';
+        ctx.fillRect(ox+Math.cos(da)*dgP*25-3,dgY-dgP*30*((i%2)+0.5)-3,6,6);
+      }
+    } else {
+      const dgE=(p-0.4)/0.6;
+      for(let i=0;i<8;i++){
+        const da=i*(Math.PI*2/8);
+        const dr=dgE*50;
+        ctx.globalAlpha=(1-dgE)*fade;
+        ctx.fillStyle='rgba('+(160+i*10)+','+(100+i*5)+',50,0.8)';
+        ctx.beginPath();ctx.arc(tx2+Math.cos(da)*dr,ty2+Math.sin(da)*dr,4+dgE*6,0,Math.PI*2);ctx.fill();
+      }
+      ctx.globalAlpha=fade*0.8;
+      ctx.strokeStyle='#7a5010';ctx.lineWidth=2;
+      for(let i=0;i<4;i++){
+        const da=i*(Math.PI/2)+0.3;
+        ctx.beginPath();ctx.moveTo(tx2,ty2);
+        ctx.lineTo(tx2+Math.cos(da)*dgE*35,ty2+Math.sin(da)*dgE*20);ctx.stroke();
+      }
+    }
+    ctx.globalAlpha=1;
+    return;
+  }
+
+  if(type==='AQUATIC'||/Water|Wave|Splash|Surf|Tidal|Aqua|Ripple|Skate|Torrent/i.test(move)){
+    for(let i=0;i<8;i++){
+      const wp=((p+i/8)%1);
+      const wdx=ox+(tx2-ox)*wp;
+      const wdy=oy+(ty2-oy)*wp-Math.sin(wp*Math.PI)*30;
+      ctx.globalAlpha=(1-wp)*fade;
+      ctx.fillStyle='rgba(80,180,255,0.8)';
+      ctx.beginPath();ctx.arc(wdx,wdy,4+wp*3,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='rgba(180,230,255,0.6)';
+      ctx.beginPath();ctx.arc(wdx-1,wdy-1,1.5,0,Math.PI*2);ctx.fill();
+    }
+    if(p>0.6){
+      const wsp=(p-0.6)/0.4;
+      for(let i=0;i<6;i++){
+        const wa=i*(Math.PI/3);
+        ctx.globalAlpha=(1-wsp)*fade;
+        ctx.fillStyle='rgba(100,200,255,0.7)';
+        ctx.beginPath();ctx.arc(tx2+Math.cos(wa)*wsp*28,ty2+Math.sin(wa)*wsp*20,3+wsp*4,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.globalAlpha=1;
+    return;
+  }
+
+  if(type==='FLYING'||/Gust|Wind|Wing|Air|Sky|Flash|Bolt|Zip|Dart|Slash|Cut|Gale|Migration|Burst|Dodge/i.test(move)){
+    const fang=isPlayer?-0.3:Math.PI+0.3;
+    for(let i=0;i<4;i++){
+      const fsp=Math.max(0,Math.min(1,(p*1.3-i*0.12)));
+      const flen=60+i*20;
+      const fcx=tx2+Math.sin(fang+i*0.3)*20;
+      const fcy=ty2+Math.cos(fang+i*0.3)*10;
+      ctx.globalAlpha=Math.max(0,1-fsp*1.5)*fade;
+      ctx.strokeStyle='rgba(240,240,255,'+(0.8-i*0.15)+')';
+      ctx.lineWidth=4-i;
+      ctx.beginPath();
+      ctx.moveTo(fcx-Math.cos(fang)*flen*0.4,fcy-Math.sin(fang)*flen*0.4);
+      ctx.lineTo(fcx+Math.cos(fang)*flen,fcy+Math.sin(fang)*flen);
+      ctx.stroke();
+    }
+    if(p<0.5){
+      const ftp=p/0.5;
+      for(let i=0;i<5;i++){
+        ctx.globalAlpha=(1-ftp)*0.6*fade;
+        ctx.strokeStyle='rgba(220,240,255,0.6)';ctx.lineWidth=1;
+        const flx=ox+(tx2-ox)*ftp+(i-2)*8;
+        const fly2=oy+(ty2-oy)*ftp;
+        ctx.beginPath();ctx.moveTo(flx-20,fly2);ctx.lineTo(flx+20,fly2);ctx.stroke();
+      }
+    }
+    ctx.globalAlpha=1;
+    return;
+  }
+
+  if(type==='MOLD'||/Spore|Mold|Slime|Mush|Fungus|Poison|Toxic|Smother|Root|Bloom|Sand|Trap/i.test(move)){
+    for(let i=0;i<6;i++){
+      const msp=((p+i/6)%1);
+      const msx=ox+(tx2-ox)*msp+Math.sin(msp*6+i)*10;
+      const msy=oy+(ty2-oy)*msp;
+      ctx.globalAlpha=(1-msp)*fade*0.8;
+      ctx.fillStyle='hsla('+(260+i*15)+',60%,60%,0.7)';
+      ctx.beginPath();ctx.arc(msx,msy,5+msp*12,0,Math.PI*2);ctx.fill();
+    }
+    if(p>0.5){
+      const mep=(p-0.5)/0.5;
+      for(let i=0;i<10;i++){
+        const ma=i*(Math.PI*2/10)+mep*2;
+        const mr=mep*30;
+        ctx.globalAlpha=(1-mep)*fade*0.9;
+        ctx.fillStyle='hsla('+(270+i*8)+',55%,55%,0.8)';
+        ctx.beginPath();ctx.arc(tx2+Math.cos(ma)*mr,ty2+Math.sin(ma)*mr,2+mep*4,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.globalAlpha=1;
+    return;
+  }
+
+  if(kind==='status'){
+    const bx=isPlayer?110:360, by2=isPlayer?175:160;
+    const scol=type==='BEETLE'?'#f0c040':type==='FLYING'?'#c0e8ff':type==='MOLD'?'#d080ff':'#80ff80';
+    ctx.globalAlpha=fade*(1-p)*0.9;
+    ctx.strokeStyle=scol;ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(bx,by2,16+p*40,0,Math.PI*2);ctx.stroke();
+    ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.arc(bx,by2,10+p*24,0,Math.PI*2);ctx.stroke();
+    for(let i=0;i<6;i++){
+      const sa=i*(Math.PI/3)+p*3;
+      const sr=24+Math.sin(p*8+i)*8;
+      ctx.globalAlpha=fade*Math.abs(Math.sin(p*6+i))*0.8;
+      ctx.fillStyle=scol;
+      ctx.fillRect(bx+Math.cos(sa)*sr-2,by2+Math.sin(sa)*sr-2,4,4);
+    }
+    ctx.globalAlpha=1;
+    return;
+  }
+
+  if(p>0.3){
+    const ip=(p-0.3)/0.7;
+    const icol=type==='BEETLE'?'#f0c040':'#ffffff';
+    for(let i=0;i<8;i++){
+      const ia=i*(Math.PI/4)+ip*0.5;
+      const ir=ip*36;
+      ctx.globalAlpha=(1-ip)*fade;
+      ctx.strokeStyle=icol;ctx.lineWidth=2+ip*2;
+      ctx.beginPath();ctx.moveTo(tx2,ty2);
+      ctx.lineTo(tx2+Math.cos(ia)*ir,ty2+Math.sin(ia)*ir);ctx.stroke();
+    }
+    ctx.globalAlpha=(1-ip)*fade*0.9;
+    ctx.fillStyle=icol;
+    ctx.beginPath();ctx.arc(tx2,ty2,(1-ip)*16,0,Math.PI*2);ctx.fill();
+  }
+  if(p<0.5){
+    const itp=p/0.5;
+    ctx.globalAlpha=fade;
+    ctx.fillStyle=type==='BEETLE'?'#f0c040':'#e0e0e0';
+    ctx.beginPath();ctx.arc(fx,fy,5+itp*3,0,Math.PI*2);ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
 function battleSpriteOffsets(){
   const out={px:0,py:0,ex:0,ey:0,effects:[]};
   const arr=G.attackAnims||[];
@@ -3550,18 +3764,19 @@ function autoSwap(){
   return true;
 }
 function calcDmg(baseDmg,isCrit,attacker,defender,moveType){
-  // Each move has a fixed base damage (7-12 range), plus crit
-  let roll=baseDmg+Math.floor(Math.random()*4)-1; // ±1-2 variance
-  // Level scaling: each level above 1 adds ~5% damage
-  if(attacker&&attacker.level) roll = roll * (1 + (attacker.level-1)*0.05);
+  let roll=baseDmg+Math.floor(Math.random()*4)-1;
+  // Blend level scaling and ATK stat equally
+  const levelMult = attacker&&attacker.level ? (1+(attacker.level-1)*0.05) : 1;
+  const atkMult   = attacker&&attacker.atk   ? Math.sqrt(attacker.atk/20) : 1;
+  roll = roll * (levelMult*0.5 + atkMult*0.5);
   // DEF dampening
-  if(defender&&defender.def) roll = roll * (10/(10+defender.def*0.18));
-  // Type bonus 1.5x when moveType beats defender.type
+  if(defender&&defender.def) roll=roll*(10/(10+defender.def*0.18));
+  // Type bonus
   let typeMult=1;
-  if(moveType && defender && defender.type && TYPE_BEATS[moveType]===defender.type) typeMult=1.5;
-  roll = roll * typeMult;
-  if(isCrit) roll = roll*1.5;
-  return{dmg:Math.max(1,Math.round(roll)), typeMult};
+  if(moveType&&defender&&defender.type&&TYPE_BEATS[moveType]===defender.type) typeMult=1.5;
+  roll=roll*typeMult;
+  if(isCrit) roll=roll*1.5;
+  return{dmg:Math.max(1,Math.round(roll)),typeMult};
 }
 function doMove(mv){
   const me = G.battleParty[0], wild = G.battle.wild, m = MOVES[mv];
@@ -3818,36 +4033,30 @@ function doZAction(allowRake=true){
     return;
   }
 
-  // Newtown — lab door enters felix lab
+  // Newtown — NPC interaction only, door entry is automatic on walk-through
   if(G.zone==='newtown'){
-    const dirs3=[[0,-1],[1,0],[0,1],[-1,0]];
-    const[ddx3,ddy3]=dirs3[p.dir]||[0,1];
-    const ftile3=gt('newtown',tx+ddx3,ty+ddy3);
-    if(ftile3===59){
-      G.prevZone='newtown';
-      G.zone='felixlab'; resetMap('felixlab');
-      p.x=14*TW; p.y=23*TW; p.dir=0;
-      p.visX=p.x; p.visY=p.y;
-      showZoneName('felixlab');
-      G.pcMsg='You step into\nDr. Okafor\'s lab.\nIt smells like\nburned solder and\ninstant noodles.';
-      G.pcMsgTimer=240;
-      sfx&&sfx('portal');
-      return;
-    }
     if(interactWithFacingNPC())return;
     return;
   }
 
-  // Felix lab — exit door returns to newtown
+  // Felix lab — NPC interaction only, exit is automatic on walk-through
   if(G.zone==='felixlab'){
-    const curTile=gt('felixlab',tx,ty);
-    if(curTile===62||(ty>=TALL-3&&tx>=13&&tx<=15)){
-      G.zone='newtown'; resetMap('newtown');
-      p.x=14*TW; p.y=14*TW; p.dir=2;
-      p.visX=p.x; p.visY=p.y;
-      showZoneName('newtown');
-      sfx&&sfx('portal');
-      return;
+    // Z near Felix
+    if(G.felixLab){
+      const fl=G.felixLab;
+      if(Math.abs(fl.x-G.player.x)<TW*2&&Math.abs(fl.y-G.player.y)<TW*2){
+        fl.talked=true;
+        const sm=G.inventory.strangeMetal||0, wi=G.inventory.wire||0;
+        const ag=G.inventory.antiGravGen||0, so=G.inventory.strangeOrb||0;
+        const total=Math.min(sm,5)+Math.min(wi,4)+Math.min(ag,1)+Math.min(so,2);
+        if(total>=TOTAL_PIECES){
+          G.pcMsg='DR. FELIX:\n"With these pieces\nI can reconstruct\nthe alien drive.\nWe\'re going to\nrebuild that ship!"';
+        } else {
+          G.pcMsg=`DR. FELIX:\n"Incredible material.\nBut I need more.\nMetal:${5-Math.min(sm,5)}\nWire:${4-Math.min(wi,4)}\nOrbs:${2-Math.min(so,2)}"`;
+        }
+        G.pcMsgTimer=320;
+        return;
+      }
     }
     if(interactWithFacingNPC())return;
     return;
@@ -5277,63 +5486,202 @@ function drawTruckCutscene(){
   const tc=G._truck;
   if(!tc){G.screen='world';return;}
   tc.timer++;
+  const t=tc.timer;
+  const scroll=t*2.5;
 
-  // Scrolling desert road
-  const scroll=tc.timer*3;
-  X.fillStyle='#d4a060'; X.fillRect(0,0,GAME_W,GAME_H);
-  // Sky
-  X.fillStyle='#d4905a'; X.fillRect(0,0,GAME_W,180);
-  // Road
-  X.fillStyle='#808070'; X.fillRect(100,180,280,252);
-  X.fillStyle='#707060'; X.fillRect(220,180,40,252);
-  // Dashes on road
+  // ── Sky with gradient bands ──
+  X.fillStyle='#e8c080'; X.fillRect(0,0,GAME_W,GAME_H);
+  // Sun haze at horizon
+  X.fillStyle='#f0d0a0'; X.fillRect(0,0,GAME_W,210);
+  X.fillStyle='#e8b878'; X.fillRect(0,0,GAME_W,160);
+  X.fillStyle='#d8a060'; X.fillRect(0,0,GAME_W,120);
+  X.fillStyle='#c89050'; X.fillRect(0,0,GAME_W,80);
+  // Sun
+  X.fillStyle='#fff0b0';
+  X.beginPath();X.arc(380,60,28,0,Math.PI*2);X.fill();
+  X.fillStyle='rgba(255,240,160,0.3)';
+  X.beginPath();X.arc(380,60,44,0,Math.PI*2);X.fill();
+
+  // ── Horizon line ──
+  const H=210; // horizon y
+
+  // ── Desert ground — perspective trap ──
+  X.fillStyle='#c89848'; X.fillRect(0,H,GAME_W,GAME_H-H);
+  // Ground texture bands (perspective lines)
+  for(let i=0;i<8;i++){
+    const gy=H+20+i*28;
+    const alpha=0.06+i*0.02;
+    X.fillStyle=`rgba(100,60,10,${alpha})`;
+    X.fillRect(0,gy,GAME_W,12-i);
+  }
+
+  // ── Desert features scrolling past ──
+  // Distant dunes at horizon
   for(let i=0;i<6;i++){
-    const dy=((i*80-scroll)%480+480)%480;
-    X.fillStyle='#f0e090'; X.fillRect(234,180+dy,12,40);
+    const dx=((i*140+scroll*0.15)%760-100);
+    const dh=20+((i*37)%30);
+    X.fillStyle='#b88840';
+    X.beginPath();X.moveTo(dx,H);X.lineTo(dx+60,H-dh);X.lineTo(dx+120,H);X.fill();
+    X.fillStyle='#d0a050';
+    X.beginPath();X.moveTo(dx+10,H);X.lineTo(dx+60,H-dh+4);X.lineTo(dx+110,H);X.fill();
   }
-  // Moving desert horizon objects
+
+  // Mid-ground cacti / rocks scrolling
   for(let i=0;i<5;i++){
-    const ox=((i*120+Math.floor(scroll*0.3))%560-40);
-    X.fillStyle='#c09040'; X.fillRect(ox,140,30,40);
-    X.fillStyle='#b08030'; X.fillRect(ox+5,130,20,16);
+    const rx=((i*200+scroll*0.6)%780-60);
+    const ry=H+16+((i*41)%30);
+    const rs=0.6+((i*17)%3)*0.2;
+    // Rock
+    X.fillStyle='#a07830';
+    X.fillRect(rx,ry,Math.round(28*rs),Math.round(18*rs));
+    X.fillStyle='#b89040';
+    X.fillRect(rx+2,ry-4,Math.round(18*rs),Math.round(6*rs));
+    // Cactus next to it
+    const cx2=rx+40;
+    X.fillStyle='#508040';
+    X.fillRect(cx2+4,ry-20,6,22); // trunk
+    X.fillRect(cx2,ry-14,14,5);   // left arm
+    X.fillRect(cx2+8,ry-18,6,10); // right arm nub
   }
-  // Truck body (stationary in frame, road scrolls)
+
+  // ── Road — perspective trapezoid ──
+  const roadTop=14, roadBot=180;
+  const vanX=GAME_W/2;
+  // Road base (asphalt)
+  X.fillStyle='#706858';
+  X.beginPath();
+  X.moveTo(vanX-roadTop,H); X.lineTo(vanX+roadTop,H);
+  X.lineTo(vanX+roadBot,GAME_H); X.lineTo(vanX-roadBot,GAME_H);
+  X.closePath(); X.fill();
+  // Road surface highlight
+  X.fillStyle='#807868';
+  X.beginPath();
+  X.moveTo(vanX-roadTop+2,H); X.lineTo(vanX+roadTop-2,H);
+  X.lineTo(vanX+roadBot-20,GAME_H); X.lineTo(vanX-roadBot+20,GAME_H);
+  X.closePath(); X.fill();
+
+  // Road edge lines (white)
+  X.strokeStyle='rgba(240,230,180,0.7)'; X.lineWidth=2;
+  X.beginPath();X.moveTo(vanX-roadTop,H);X.lineTo(vanX-roadBot,GAME_H);X.stroke();
+  X.beginPath();X.moveTo(vanX+roadTop,H);X.lineTo(vanX+roadBot,GAME_H);X.stroke();
+
+  // Centre dashes — perspective scaled
+  for(let i=0;i<7;i++){
+    const prog=((i/7+scroll*0.004)%1);
+    const dy=H+prog*(GAME_H-H);
+    const dw=2+prog*10;
+    const dh=4+prog*14;
+    const alpha=0.3+prog*0.5;
+    X.fillStyle=`rgba(240,220,120,${alpha})`;
+    X.fillRect(vanX-dw/2, dy, dw, dh);
+  }
+
+  // Road shoulders / dirt
+  X.fillStyle='#b89048';
+  X.beginPath();
+  X.moveTo(0,GAME_H); X.lineTo(vanX-roadBot,GAME_H);
+  X.lineTo(vanX-roadTop,H); X.lineTo(0,H); X.closePath(); X.fill();
+  X.beginPath();
+  X.moveTo(GAME_W,GAME_H); X.lineTo(vanX+roadBot,GAME_H);
+  X.lineTo(vanX+roadTop,H); X.lineTo(GAME_W,H); X.closePath(); X.fill();
+
+  // ── Truck — side view, rolling ──
+  const truckY=290;
+  const wheelR=22;
+  const bobble=Math.sin(t*0.18)*1.5; // slight road bounce
+
+  // Truck bed / cargo
+  X.fillStyle='#606870'; X.fillRect(40,truckY+bobble-30,160,60);
+  X.fillStyle='#505860'; X.fillRect(42,truckY+bobble-28,156,56);
+  // Cargo cover tarp
+  X.fillStyle='#708060'; X.fillRect(44,truckY+bobble-36,154,12);
+  X.fillStyle='rgba(255,255,255,0.07)'; X.fillRect(44,truckY+bobble-36,154,4);
+
   // Cab
-  X.fillStyle='#404858'; X.fillRect(160,210,160,100);
-  X.fillStyle='#505868'; X.fillRect(168,218,144,60);
-  // Windshield
-  X.fillStyle='rgba(140,200,240,0.6)'; X.fillRect(260,220,56,50);
-  // Hood
-  X.fillStyle='#303848'; X.fillRect(280,280,80,30);
-  // Wheels
-  X.fillStyle='#1a1a1a';
-  X.beginPath();X.arc(200,310,22,0,Math.PI*2);X.fill();
-  X.beginPath();X.arc(320,310,22,0,Math.PI*2);X.fill();
-  X.fillStyle='#606060';
-  X.beginPath();X.arc(200,310,10,0,Math.PI*2);X.fill();
-  X.beginPath();X.arc(320,310,10,0,Math.PI*2);X.fill();
-  // Exhaust puff
-  const puff=0.3+0.3*Math.sin(tc.timer*0.2);
-  X.fillStyle=`rgba(180,180,160,${puff})`; X.fillRect(155,270,10,20);
-  // Dialog strip
-  X.fillStyle='rgba(0,0,0,0.7)'; X.fillRect(0,358,480,74);
-  X.fillStyle='#60a8ff'; X.fillRect(0,358,480,3);
-  if(tc.timer<180){
-    T('DR. FELIX OKAFOR:',14,376,6,'#90c8ff');
-    T('"She\'s gonna love',14,392,6,'#ffffff');
-    T('this haul..."',14,408,6,'#ffffff');
-  } else if(tc.timer<320){
-    T('DR. FELIX OKAFOR:',14,376,6,'#90c8ff');
+  X.fillStyle='#506078'; X.fillRect(196,truckY+bobble-48,120,78);
+  X.fillStyle='#607088'; X.fillRect(200,truckY+bobble-44,112,68);
+  // Windshield (angled)
+  X.fillStyle='rgba(160,220,255,0.55)'; X.fillRect(268,truckY+bobble-40,42,44);
+  X.fillStyle='rgba(200,240,255,0.25)'; X.fillRect(270,truckY+bobble-38,14,16);
+  // Cab window stripe
+  X.fillStyle='rgba(0,0,0,0.2)'; X.fillRect(196,truckY+bobble-20,70,4);
+  // Headlight
+  X.fillStyle='#f0e090'; X.fillRect(312,truckY+bobble-18,8,10);
+  X.fillStyle='rgba(255,240,150,0.4)'; X.fillRect(320,truckY+bobble-20,14,14);
+  // Front bumper
+  X.fillStyle='#383840'; X.fillRect(310,truckY+bobble+28,18,8);
+  // Exhaust pipe & smoke
+  X.fillStyle='#383840'; X.fillRect(36,truckY+bobble-40,8,20);
+  for(let s=0;s<4;s++){
+    const sp=((t*0.15+s*0.6)%1);
+    const sx2=36+sp*(-30);
+    const sy2=truckY+bobble-40-sp*40;
+    const sr=3+sp*8;
+    const sa=0.5*(1-sp);
+    X.fillStyle=`rgba(180,170,160,${sa})`;
+    X.beginPath();X.arc(sx2,sy2,sr,0,Math.PI*2);X.fill();
+  }
+
+  // Wheels — spinning
+  const spin=t*0.15;
+  [85, 175, 228, 306].forEach(wx=>{
+    X.fillStyle='#181818';
+    X.beginPath();X.arc(wx,truckY+bobble+30,wheelR,0,Math.PI*2);X.fill();
+    // Tyre tread
+    X.strokeStyle='#282828';X.lineWidth=3;
+    X.beginPath();X.arc(wx,truckY+bobble+30,wheelR-2,0,Math.PI*2);X.stroke();
+    // Rim
+    X.fillStyle='#888898';
+    X.beginPath();X.arc(wx,truckY+bobble+30,wheelR-8,0,Math.PI*2);X.fill();
+    // Spokes
+    X.strokeStyle='#606068';X.lineWidth=2;
+    for(let sp2=0;sp2<5;sp2++){
+      const a=spin+sp2*(Math.PI*2/5);
+      X.beginPath();
+      X.moveTo(wx,truckY+bobble+30);
+      X.lineTo(wx+Math.cos(a)*(wheelR-9),truckY+bobble+30+Math.sin(a)*(wheelR-9));
+      X.stroke();
+    }
+  });
+
+  // ── Dialog ──
+  X.fillStyle='rgba(0,0,0,0.72)'; X.fillRect(0,358,480,74);
+  X.fillStyle='#e8a840'; X.fillRect(0,358,480,3);
+  if(t<160){
+    T('DR. FELIX:',14,376,6,'#f0c060');
+    T('"Ha! We really did it.',14,392,6,'#ffffff');
+    T('Buckle up..."',14,408,6,'#ffffff');
+  } else if(t<320){
+    T('DR. FELIX:',14,376,6,'#f0c060');
     T('"Almost there.',14,392,6,'#ffffff');
     T('My lab\'s just ahead."',14,408,6,'#ffffff');
   } else {
-    // Fade to black
-    const alpha=Math.min(1,(tc.timer-320)/60);
+    const alpha=Math.min(1,(t-320)/60);
     X.fillStyle=`rgba(0,0,0,${alpha})`; X.fillRect(0,0,GAME_W,GAME_H);
-    if(tc.timer>380) finishTruckCutscene();
+    if(t>380) finishTruckCutscene();
   }
 }
 
+function enterFelixLab(){
+  G.prevZone='newtown';
+  G.zone='felixlab'; resetMap('felixlab');
+  const p=G.player;
+  p.x=14*TW; p.y=4*TW; p.dir=2;  // top of lab, just below exit door
+  p.visX=p.x; p.visY=p.y;
+  showZoneName('felixlab');
+  sfx&&sfx('portal');
+  G.felixLab={x:14*TW, y:13*TW, dir:2, talked:false};
+  G.pcMsg='DR. FELIX OKAFOR:\n"In here! Come,\ncome — you need to\nsee what we\'ve built\nwith those pieces!"';
+  G.pcMsgTimer=300;
+}
+function exitFelixLab(){
+  G.zone='newtown'; resetMap('newtown');
+  const p=G.player;
+  p.x=21*TW; p.y=13*TW; p.dir=2;  // on main road, clear of building
+  p.visX=p.x; p.visY=p.y;
+  showZoneName('newtown');
+  sfx&&sfx('portal');
+}
 function finishTruckCutscene(){
   G._truck=null;
   G.zone='newtown'; resetMap('newtown');
@@ -5345,7 +5693,7 @@ function finishTruckCutscene(){
   if(!G.unlockedZones) G.unlockedZones=new Set();
   G.unlockedZones.add('newtown');
   showZoneName('newtown');
-  G.pcMsg='You arrive at\nSCATTERED ROCK.\nDr. Okafor\'s lab\nis just up ahead.\nThe town smells like\ncoffee and diesel.';
+  G.pcMsg='You arrive at\nMUSHI CITY.\nDr. Okafor\'s lab\nis just up ahead.\nThe town smells like\ncoffee and diesel.';
   G.pcMsgTimer=340;
   G.screen='world';
   sfx&&sfx('portal');
@@ -5361,69 +5709,135 @@ function buildNewtownMap(){
   const m=Array.from({length:TALL},()=>new Uint8Array(WIDE));
   for(let x=0;x<WIDE;x++){m[0][x]=2;m[TALL-1][x]=2;}
   for(let y=0;y<TALL;y++){m[y][0]=2;m[y][WIDE-1]=2;}
-  // Ground — pavement (tile 57)
+  // Ground — pavement everywhere
   for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=57;
-  // Main road vertical (tile 56)
-  for(let y=1;y<TALL-1;y++){m[y][13]=56;m[y][14]=56;m[y][15]=56;}
-  // Road horizontal mid
-  for(let x=1;x<WIDE-1;x++){m[13][x]=56;m[14][x]=56;}
-  // Buildings — solid blocks (tile 58)
-  // Left block (shops)
-  for(let y=2;y<=11;y++) for(let x=2;x<=11;x++) m[y][x]=58;
-  // Right block
-  for(let y=2;y<=11;y++) for(let x=17;x<=27;x++) m[y][x]=58;
-  // Bottom-left building
-  for(let y=16;y<=24;y++) for(let x=2;x<=10;x++) m[y][x]=58;
-  // Felix lab — bottom-right (tile 58 walls, 59 = lab door walkable)
-  for(let y=16;y<=24;y++) for(let x=17;x<=27;x++) m[y][x]=58;
-  // Doorways (walkable openings into buildings)
-  m[12][6]=57; m[12][7]=57; // left shop entrance
-  m[12][21]=57; m[12][22]=57; // right shop entrance
-  m[15][6]=57; m[15][7]=57; // bottom-left entrance
-  // Felix lab door
-  m[15][21]=59; m[15][22]=59;
-  // Sidewalk strips adjacent to road
+  // ── Main road (rows 12-13) runs the full width ──
+  for(let x=1;x<WIDE-1;x++){m[12][x]=56;m[13][x]=56;}
+  // Sidestreets
+  for(let y=1;y<=11;y++){m[y][8]=56;m[y][9]=56;}
+  for(let y=1;y<=11;y++){m[y][20]=56;m[y][21]=56;}
+  for(let y=14;y<=25;y++){m[y][14]=56;m[y][15]=56;}
+  // ── North buildings — fully solid, no doorways ──
+  for(let y=1;y<=10;y++) for(let x=1;x<=7;x++) m[y][x]=58;
+  for(let y=1;y<=10;y++) for(let x=10;x<=19;x++) m[y][x]=58;
+  for(let y=1;y<=10;y++) for(let x=22;x<=28;x++) m[y][x]=58;
+  // ── South buildings ──
+  for(let y=15;y<=25;y++) for(let x=1;x<=12;x++) m[y][x]=58;
+  // Felix lab building (right south) — solid walls with walk-through door
+  for(let y=15;y<=25;y++) for(let x=17;x<=28;x++) m[y][x]=58;
+  // Lab door row 14 — walkable tile that auto-enters
+  m[14][21]=59; m[14][22]=59;
+  // ── Grass and trees ──
+  // Row 11 strips (between north buildings and road)
+  for(let x=1;x<=7;x++) m[11][x]=63;
+  for(let x=22;x<=28;x++) m[11][x]=63;
+  m[11][1]=64; m[11][28]=64; // corner trees
+  // Central south park (between the two south buildings)
+  for(let y=15;y<=25;y++) for(let x=13;x<=16;x++) m[y][x]=63;
+  m[17][13]=64; m[19][16]=64; m[22][13]=64; m[21][16]=64;
   return m;
 }
-
 function drawTileNewtown(tile,sx,sy,tx,ty){
-  if(tile===56){ // Road
-    X.fillStyle='#505050'; X.fillRect(sx,sy,TW,TW);
-    // Lane marking
-    if((tx+ty)%8===0){ X.fillStyle='rgba(240,220,80,0.6)'; X.fillRect(sx+6,sy,3,TW); }
+  if(tile===56){ // Road — warm asphalt with dashes
+    X.fillStyle='#484440'; X.fillRect(sx,sy,TW,TW);
+    X.fillStyle='#545050'; X.fillRect(sx+1,sy+1,TW-2,TW-2);
+    if((tx+ty)%7===0){ X.fillStyle='rgba(255,220,60,0.65)'; X.fillRect(sx+6,sy,3,TW); }
     return;
   }
-  if(tile===57){ // Pavement
-    const checker=(tx+ty)%2;
-    X.fillStyle=checker?'#c8c0b0':'#d8d0c0'; X.fillRect(sx,sy,TW,TW);
-    X.fillStyle='rgba(0,0,0,0.06)'; X.fillRect(sx,sy,TW,1); X.fillRect(sx,sy,1,TW);
-    return;
-  }
-  if(tile===58){ // Building wall
-    X.fillStyle='#8a6848'; X.fillRect(sx,sy,TW,TW);
-    X.fillStyle='#9a7858'; X.fillRect(sx+1,sy+1,TW-2,TW-2);
-    // Window every few tiles
-    if((tx%3===1)&&(ty%3===1)){
-      X.fillStyle='rgba(200,220,255,0.5)'; X.fillRect(sx+3,sy+3,TW-6,TW-6);
-      X.fillStyle='rgba(255,255,255,0.3)'; X.fillRect(sx+4,sy+4,4,3);
+  if(tile===57){ // Pavement — warm colourful flags
+    const hue=(tx*37+ty*53)%360;
+    const base=(tx+ty)%3;
+    const cols=['#d4c8b8','#ccc4b4','#c8bca8'];
+    X.fillStyle=cols[base]; X.fillRect(sx,sy,TW,TW);
+    // Subtle grout lines
+    X.fillStyle='rgba(120,100,80,0.2)'; X.fillRect(sx,sy,TW,1); X.fillRect(sx,sy,1,TW);
+    // Occasional colour accent tile
+    if((tx*7+ty*11)%17===0){
+      X.fillStyle=`hsla(${hue},60%,60%,0.18)`; X.fillRect(sx+1,sy+1,TW-2,TW-2);
     }
     return;
   }
-  if(tile===59){ // Lab door
-    X.fillStyle='#c8c0b0'; X.fillRect(sx,sy,TW,TW);
-    X.fillStyle='#2060a0'; X.fillRect(sx+2,sy+1,TW-4,TW-2);
-    X.fillStyle='rgba(150,200,255,0.6)'; X.fillRect(sx+4,sy+3,TW-8,TW-6);
-    // Lab sign glow
-    const glow=0.5+0.5*Math.abs(Math.sin(G.tick*0.06));
-    X.fillStyle=`rgba(100,180,255,${glow*0.5})`;
-    X.fillRect(sx+3,sy+2,TW-6,4);
+  if(tile===58){ // Building wall — 3D effect with roof/face/shadow
+    const blockX=Math.floor(tx/7), blockY=Math.floor(ty/6);
+    const hues=['#d07848','#4898d0','#c05870','#58b858','#b888d0','#d0b840'];
+    const base=hues[(blockX*3+blockY)%hues.length];
+    // Check neighbours to determine face type
+    const tileBelow=gt(G.zone==='newtown'?'newtown':G.zone, tx, ty+1);
+    const tileAbove=gt(G.zone==='newtown'?'newtown':G.zone, tx, ty-1);
+    const tileRight=gt(G.zone==='newtown'?'newtown':G.zone, tx+1, ty);
+    const isFrontRow=tileBelow!==58&&tileBelow!==64&&tileBelow!==63; // bottom face of building
+    const isRoofRow=tileAbove!==58; // top face (rooftop visible)
+
+    if(isRoofRow){
+      // Rooftop — lighter, flat colour
+      const roof=base.replace(/^#/,'');
+      const r=parseInt(roof.slice(0,2),16), g2=parseInt(roof.slice(2,4),16), b=parseInt(roof.slice(4,6),16);
+      X.fillStyle=`rgb(${Math.min(255,r+60)},${Math.min(255,g2+60)},${Math.min(255,b+60)})`;
+      X.fillRect(sx,sy,TW,TW);
+      // Roof detail stripe
+      X.fillStyle='rgba(255,255,255,0.2)'; X.fillRect(sx,sy,TW,3);
+    } else if(isFrontRow){
+      // Front face — slightly darker, has windows
+      const roof=base.replace(/^#/,'');
+      const r=parseInt(roof.slice(0,2),16), g2=parseInt(roof.slice(2,4),16), b=parseInt(roof.slice(4,6),16);
+      X.fillStyle=`rgb(${Math.max(0,r-20)},${Math.max(0,g2-20)},${Math.max(0,b-20)})`;
+      X.fillRect(sx,sy,TW,TW);
+      // Drop shadow at bottom
+      X.fillStyle='rgba(0,0,0,0.25)'; X.fillRect(sx,sy+TW-3,TW,3);
+    } else {
+      // Normal wall face
+      X.fillStyle=base; X.fillRect(sx,sy,TW,TW);
+    }
+    // Right edge shadow
+    if(tileRight!==58){ X.fillStyle='rgba(0,0,0,0.2)'; X.fillRect(sx+TW-3,sy,3,TW); }
+    // Windows (only on normal wall tiles)
+    if(!isRoofRow&&(tx%3===1)&&(ty%4===2)){
+      X.fillStyle='rgba(255,240,180,0.8)'; X.fillRect(sx+3,sy+3,TW-6,TW-6);
+      X.fillStyle='rgba(180,160,80,0.5)'; X.fillRect(sx+TW/2-0.5,sy+3,1.5,TW-6);
+      X.fillStyle='rgba(180,160,80,0.5)'; X.fillRect(sx+3,sy+TW/2-0.5,TW-6,1.5);
+      X.fillStyle='rgba(255,255,200,0.5)'; X.fillRect(sx+4,sy+4,3,3);
+    }
     return;
   }
-  if(tile===2){
-    X.fillStyle='#6a5038'; X.fillRect(sx,sy,TW,TW);
+  if(tile===59){ // Lab door — glowing blue walk-through entrance
+    X.fillStyle='#d0c8b8'; X.fillRect(sx,sy,TW,TW);
+    // Door frame
+    X.fillStyle='#2858a8'; X.fillRect(sx+2,sy+0,TW-4,TW);
+    // Glass pane
+    const glow=0.5+0.4*Math.abs(Math.sin(G.tick*0.07));
+    X.fillStyle=`rgba(140,200,255,${0.5+glow*0.3})`; X.fillRect(sx+4,sy+2,TW-8,TW-2);
+    // Shimmer
+    X.fillStyle=`rgba(220,240,255,${glow*0.5})`; X.fillRect(sx+5,sy+3,3,6);
+    // Sign glow above door
+    X.fillStyle=`rgba(80,160,255,${glow*0.6})`; X.fillRect(sx+2,sy,TW-4,3);
     return;
   }
-  X.fillStyle='#b0a890'; X.fillRect(sx,sy,TW,TW);
+  if(tile===63){ // Grass patch
+    const g1=0.55+0.15*Math.sin(tx*0.8+ty*0.6);
+    X.fillStyle=`rgb(${Math.round(60+g1*30)},${Math.round(160+g1*40)},${Math.round(60+g1*20)})`; X.fillRect(sx,sy,TW,TW);
+    // Grass blades
+    X.fillStyle='rgba(40,180,40,0.4)';
+    if((tx*5+ty*3)%4===0){ X.fillRect(sx+3,sy+2,2,6); X.fillRect(sx+9,sy+4,2,5); X.fillRect(sx+6,sy+1,2,7); }
+    // Tiny flowers
+    if((tx*11+ty*7)%9===0){ X.fillStyle='rgba(255,220,60,0.9)'; X.fillRect(sx+4,sy+4,3,3); }
+    if((tx*13+ty*5)%11===0){ X.fillStyle='rgba(255,160,200,0.9)'; X.fillRect(sx+9,sy+8,3,3); }
+    return;
+  }
+  if(tile===64){ // Tree
+    // Base grass
+    X.fillStyle='#4aaa40'; X.fillRect(sx,sy,TW,TW);
+    // Trunk
+    X.fillStyle='#8a5520'; X.fillRect(sx+5,sy+10,6,TW-10);
+    // Canopy — layered green circles
+    X.fillStyle='#2a8c28'; X.fillRect(sx+1,sy,TW-2,12);
+    X.fillStyle='#38a834'; X.fillRect(sx+2,sy+0,TW-4,10);
+    X.fillStyle='#50c048'; X.fillRect(sx+4,sy+0,TW-8,7);
+    // Highlight
+    X.fillStyle='rgba(150,255,100,0.35)'; X.fillRect(sx+5,sy+1,5,4);
+    return;
+  }
+  if(tile===2){ X.fillStyle='#5a4030'; X.fillRect(sx,sy,TW,TW); return; }
+  X.fillStyle='#c8bca8'; X.fillRect(sx,sy,TW,TW);
 }
 
 // ═══════════════════════════════════════════════
@@ -5434,15 +5848,20 @@ function buildFelixLabMap(){
   const m=Array.from({length:TALL},()=>new Uint8Array(WIDE));
   for(let x=0;x<WIDE;x++){m[0][x]=2;m[TALL-1][x]=2;}
   for(let y=0;y<TALL;y++){m[y][0]=2;m[y][WIDE-1]=2;}
+  // Lab floor everywhere
   for(let y=1;y<TALL-1;y++) for(let x=1;x<WIDE-1;x++) m[y][x]=60;
-  // Lab benches along walls
-  for(let x=2;x<=27;x++) m[2][x]=61;
-  for(let x=2;x<=27;x++) m[3][x]=61;
+  // Exit door at TOP (row 1 — replaces border, walk-through back to Mushi City)
+  m[1][13]=62; m[1][14]=62; m[1][15]=62;
+  // North bench rows 2-3 with gap above exit
+  for(let x=2;x<=27;x++){
+    if(x<12||x>16){ m[2][x]=61; m[3][x]=61; } // gap at x=12-16 for door path
+  }
+  // Side benches rows 4-20 — fully clear south half for entry
+  for(let y=4;y<=20;y++){m[y][2]=61;m[y][3]=61;}
+  for(let y=4;y<=20;y++){m[y][26]=61;m[y][27]=61;}
+  // South bench row near entry
   for(let x=2;x<=27;x++) m[22][x]=61;
-  for(let y=5;y<=20;y++){m[y][2]=61;m[y][3]=61;}
-  for(let y=5;y<=20;y++){m[y][26]=61;m[y][27]=61;}
-  // Exit door
-  m[TALL-2][13]=62; m[TALL-2][14]=62; m[TALL-2][15]=62;
+  // Entry area clear: rows 23-25 fully open (no benches)
   return m;
 }
 
@@ -5653,30 +6072,46 @@ function drawCamelSprite(ctx,cx,cy,s){
   ctx.restore();
 }
 
-// Draw wreckage world — reuses drawWorld logic but with wreckage tile renderer
-function drawWreckageWorld(camX,camY){
-  // Sandy sky gradient
-  const grad=X.createLinearGradient(0,0,0,GAME_H);
-  grad.addColorStop(0,'#d4905a');
-  grad.addColorStop(0.5,'#e8b870');
-  grad.addColorStop(1,'#c8a050');
-  X.fillStyle=grad; X.fillRect(0,0,GAME_W,GAME_H);
-
-  const map=getMap('wreckage');
-  const startTX=Math.max(0,Math.floor(camX/TW));
-  const endTX=Math.min(WIDE-1,Math.ceil((camX+GAME_W)/TW));
-  const startTY=Math.max(0,Math.floor(camY/TW));
-  const endTY=Math.min(TALL-1,Math.ceil((camY+GAME_H)/TW));
-  for(let ty2=startTY;ty2<=endTY;ty2++)
-    for(let tx2=startTX;tx2<=endTX;tx2++)
-      drawTileWreckage(map[ty2][tx2],tx2*TW-camX,ty2*TW-camY,tx2,ty2);
-
-  // Draw camel near CAMEL MAN JOAD
-  const camelSX=16*TW-camX, camelSY=20*TW-camY;
-  if(camelSX>-60&&camelSX<GAME_W+60) drawCamelSprite(X,camelSX,camelSY,1.4);
+function drawScientistNPC_at(camX,camY,wx,wy,dir){
+  const sx=wx-camX, sy=wy-camY;
+  if(sx<-32||sx>GAME_W+32||sy<-32||sy>GAME_H+32) return;
+  drawScientistNPC(camX,camY); // fallback reuse (draws from G.scientist)
 }
 
-// ── Camel man interaction ──
+// Standalone scientist draw at arbitrary position
+function drawFelixAt(ctx,cx,cy){
+  ctx.save();
+  ctx.fillStyle='rgba(0,0,0,0.18)'; ctx.fillRect(Math.round(cx-7),Math.round(cy+10),14,4);
+  ctx.fillStyle='#f0f0f0'; ctx.fillRect(Math.round(cx-5),Math.round(cy-12),10,16);
+  ctx.fillStyle='#e0e0e8'; ctx.fillRect(Math.round(cx-4),Math.round(cy-11),8,14);
+  ctx.fillStyle='#d0d0d8';
+  ctx.fillRect(Math.round(cx-5),Math.round(cy-12),3,6);
+  ctx.fillRect(Math.round(cx+2),Math.round(cy-12),3,6);
+  ctx.fillStyle='#4080c0'; ctx.fillRect(Math.round(cx-1),Math.round(cy-11),2,8);
+  ctx.fillStyle='#f0f0f0';
+  ctx.fillRect(Math.round(cx-8),Math.round(cy-10),3,10);
+  ctx.fillRect(Math.round(cx+5),Math.round(cy-10),3,10);
+  ctx.fillStyle='#c09070';
+  ctx.fillRect(Math.round(cx-8),Math.round(cy+0),3,3);
+  ctx.fillRect(Math.round(cx+5),Math.round(cy+0),3,3);
+  ctx.fillStyle='#303848';
+  ctx.fillRect(Math.round(cx-4),Math.round(cy+4),4,8);
+  ctx.fillRect(Math.round(cx+0),Math.round(cy+4),4,8);
+  ctx.fillStyle='#1a1a28';
+  ctx.fillRect(Math.round(cx-5),Math.round(cy+11),5,3);
+  ctx.fillRect(Math.round(cx+0),Math.round(cy+11),5,3);
+  ctx.fillStyle='#c09070'; ctx.fillRect(Math.round(cx-4),Math.round(cy-22),8,10);
+  ctx.fillStyle='#281808'; ctx.fillRect(Math.round(cx-4),Math.round(cy-22),8,4);
+  ctx.fillStyle='#303848';
+  ctx.fillRect(Math.round(cx-4),Math.round(cy-16),3,2);
+  ctx.fillRect(Math.round(cx+1),Math.round(cy-16),3,2);
+  ctx.fillStyle='rgba(150,200,255,0.5)';
+  ctx.fillRect(Math.round(cx-3),Math.round(cy-16),2,2);
+  ctx.fillRect(Math.round(cx+2),Math.round(cy-16),2,2);
+  ctx.fillStyle='#e8d090'; ctx.fillRect(Math.round(cx+5),Math.round(cy-8),6,8);
+  ctx.fillStyle='#404858'; ctx.fillRect(Math.round(cx+6),Math.round(cy-7),4,6);
+  ctx.restore();
+}
 function talkToCamelMan(npc){
   const allHealed=G.loadout.every(inst=>inst.hp>=inst.maxHp);
   if(allHealed){
@@ -5902,11 +6337,16 @@ function drawMenu(){
   BTN(112,158,256,34,'BAG',      ()=>{G.prevScreen='menu';G.screen='bag';});
   BTN(112,198,256,34,'FIELD KIT',()=>{G.prevScreen='menu';G.screen='gear';});
   BTN(112,238,256,34,'💾 SAVE GAME',()=>{
+    if(G.editorTestMode){ return; }
     _saveScreen.mode='save';
     _saveScreen.afterSave='world';
     _saveScreen.confirmDelete=null;
     G.screen='title_saves';
   });
+  if(G.editorTestMode){
+    X.fillStyle='rgba(0,0,0,0.55)'; X.fillRect(112,238,256,34);
+    T('(not available in editor)',240,259,5,'#a09888','center');
+  }
   BTN(112,278,256,34,'HOME SCREEN',()=>{G.screen='home_save_prompt';});
   BTN(112,318,256,34,'BACK TO WORLD',()=>G.screen='world');
   T('Use SAVE GAME in this menu to save your progress.',240,372,5,'#909898','center');
@@ -6038,6 +6478,35 @@ function drawItemSprite(ctx,key,cx,cy,s=1){
   ctx.save();
   if(key==='specialMushroom'){drawMushroomSprite(ctx,cx,cy,s);ctx.restore();return;}
   if(key==='lakeRake'){drawRakeSprite(ctx,cx,cy,s);ctx.restore();return;}
+  if(key==='digScroll'){
+    // Parchment scroll — rolled cylinder with visible rune marks
+    const sc=cx, sy2=cy;
+    // Outer roll caps (darker)
+    ctx.fillStyle='#8a6030'; ctx.fillRect(sc-10*s,sy2-18*s,20*s,5*s);
+    ctx.fillStyle='#a07040'; ctx.fillRect(sc-9*s, sy2-17*s,18*s,3*s);
+    ctx.fillStyle='#8a6030'; ctx.fillRect(sc-10*s,sy2+8*s, 20*s,5*s);
+    ctx.fillStyle='#a07040'; ctx.fillRect(sc-9*s, sy2+9*s, 18*s,3*s);
+    // Main parchment body
+    ctx.fillStyle='#d4b870'; ctx.fillRect(sc-9*s, sy2-14*s,18*s,22*s);
+    ctx.fillStyle='#e0c880'; ctx.fillRect(sc-8*s, sy2-13*s,16*s,20*s);
+    // Aged crease lines
+    ctx.fillStyle='rgba(100,70,20,0.25)';
+    ctx.fillRect(sc-6*s,sy2-10*s,12*s,1.5*s);
+    ctx.fillRect(sc-6*s,sy2-5*s, 12*s,1.5*s);
+    ctx.fillRect(sc-6*s,sy2+0*s, 12*s,1.5*s);
+    ctx.fillRect(sc-6*s,sy2+5*s, 12*s,1.5*s);
+    // Rune symbols on the scroll
+    ctx.fillStyle='#5a3010';
+    ctx.fillRect(sc-5*s,sy2-9*s,2*s,4*s); ctx.fillRect(sc-5*s,sy2-9*s,5*s,1.5*s);
+    ctx.fillRect(sc+0*s,sy2-4*s,4*s,1.5*s); ctx.fillRect(sc+2*s,sy2-4*s,1.5*s,4*s);
+    ctx.fillRect(sc-5*s,sy2+1*s,5*s,1.5*s); ctx.fillRect(sc-5*s,sy2+4*s,4*s,1.5*s);
+    ctx.fillRect(sc-3*s,sy2+1*s,1.5*s,3*s);
+    // Glow hint (magical)
+    const glow=0.3+0.2*Math.abs(Math.sin((typeof G!=='undefined'?G.tick:0)*0.1));
+    ctx.fillStyle=`rgba(180,120,40,${glow})`;
+    ctx.fillRect(sc-7*s,sy2-12*s,14*s,20*s);
+    ctx.restore(); return;
+  }
   if(key==='cocoon'){spCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
   if(key==='silkCocoon'){spSilkCocoon(ctx,cx,cy,s*0.55,false);ctx.restore();return;}
   if(key==='honey'){
@@ -7534,11 +8003,16 @@ function drawItemReward(){
   T('ITEM ACQUIRED!',240,90,9,'#c02828','center');
   X.fillStyle='#c02828';X.fillRect(76,96,328,3);
 
-  // Draw rake sprite
-  drawRakeSprite(X,240,190,3);
+  // Draw appropriate sprite based on item name
+  const nm=r.name||'';
+  if(nm.includes('RAKE')) drawRakeSprite(X,240,190,3);
+  else if(nm.includes('DIG SCROLL')||nm.includes('SCROLL')) drawItemSprite(X,'digScroll',240,190,3);
+  else if(nm.includes('DETECTOR')||nm.includes('METAL')) drawItemSprite(X,'strangeMetal',240,190,3);
+  else if(nm.includes('BEAN')) drawItemSprite(X,'igBean',240,190,2);
+  else drawRakeSprite(X,240,190,3); // fallback
 
-  T(r.name,240,240,8,'#303848','center');
-  r.desc.split('\n').forEach((l,i)=>T(l,240,264+i*18,6,'#607080','center'));
+  T(r.name,240,250,8,'#303848','center');
+  r.desc.split('\n').forEach((l,i)=>T(l,240,274+i*18,6,'#607080','center'));
 
   if(Math.floor(G.tick/22)%2===0)
     BTN(180,330,120,28,'AWESOME! →',finishItemReward);
@@ -9975,7 +10449,7 @@ const EDITOR_ZONES=[
   {id:'pc',       label:'Entomology Dept'},
   {id:'spaceship',label:'Out of This World'},
   {id:'wreckage', label:'The Wreckage'},
-  {id:'newtown',  label:'Scattered Rock'},
+  {id:'newtown',  label:'Mushi City'},
   {id:'felixlab', label:"Felix's Lab"},
 ];
 
@@ -10023,6 +10497,8 @@ const EDITOR_TILES=[
   {v:60, label:'Lab Floor',        solid:false,enc:false},
   {v:61, label:'Lab Bench',        solid:true, enc:false},
   {v:62, label:'Lab Exit',         solid:false,enc:false},
+  {v:63, label:'Grass Patch',      solid:false,enc:false},
+  {v:64, label:'Tree',             solid:true, enc:false},
 ];
 
 const CUSTOM_TILE_BASE=100;
@@ -10629,7 +11105,29 @@ function edRender(){
   ctx.restore();
   X=_X;G.zone=_zone;
 
-  // Grid
+  // Dig spot overlay — only when editor is active, only in wreckage zone
+  if(ED.zone==='wreckage'){
+    WRECKAGE_DIG_SPOTS.forEach(s=>{
+      const sx=s.tx*tileSize-ED.camX, sy=s.ty*tileSize-ED.camY;
+      if(sx+tileSize<0||sy+tileSize<0||sx>W||sy>H) return;
+      // Pulsing gold marker
+      const pulse=0.6+0.4*Math.abs(Math.sin(Date.now()*0.003+s.tx*0.7));
+      ctx.fillStyle=`rgba(255,200,40,${pulse*0.45})`;
+      ctx.fillRect(sx,sy,tileSize,tileSize);
+      ctx.strokeStyle=`rgba(255,180,20,${pulse*0.9})`;
+      ctx.lineWidth=Math.max(1,ED.zoom*0.7);
+      ctx.strokeRect(sx+ctx.lineWidth/2,sy+ctx.lineWidth/2,tileSize-ctx.lineWidth,tileSize-ctx.lineWidth);
+      // Loot label (only when zoomed in enough)
+      if(tileSize>=20){
+        ctx.fillStyle='rgba(255,220,60,0.95)';
+        ctx.font=`bold ${Math.max(7,tileSize*0.35)}px monospace`;
+        ctx.textAlign='center';
+        const label=s.loot==='strangeMetal'?'M':s.loot==='wire'?'W':s.loot==='antiGravGen'?'AG':'ORB';
+        ctx.fillText(label, sx+tileSize/2, sy+tileSize*0.65);
+        ctx.textAlign='left';
+      }
+    });
+  }
   if(ED.showGrid&&tileSize>=4){
     ctx.strokeStyle=ED.zoom>=4?'rgba(255,255,255,0.18)':'rgba(255,255,255,0.07)';
     ctx.lineWidth=ED.zoom>=4?1:0.5;
@@ -11267,9 +11765,9 @@ function edWarpToZone(zid, mode){
 
   // ── Always give a dev Monarch at Lv.80 ──
   function makeDevMonarch(){
-    const inst=newCaughtInstance('monarch',80);
+    const inst=newCaughtInstance('monarch',120);
     inst.nickname='DEV';
-    const s=levelStats('monarch',80);
+    const s=levelStats('monarch',120);
     inst.hp=s.hp; inst.maxHp=s.hp;
     inst.atk=s.atk; inst.def=s.def; inst.spd=s.spd;
     inst.moves=['Wing Gale','Milkweed Dust','Sunbeam','Migration Rush'];
@@ -11313,7 +11811,7 @@ function edWarpToZone(zid, mode){
     else G.unlockedZones=new Set([1,2,3,'high','hive','shrine']);
   }
 
-  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20},wreckage:{x:14,y:15},newtown:{x:14,y:16},felixlab:{x:14,y:20}};
+  const spawns={1:{x:14,y:18},2:{x:14,y:12},3:{x:14,y:12},high:{x:14,y:17},hive:{x:14,y:18},shrine:{x:14,y:16},pc:{x:14,y:14},spaceship:{x:14,y:20},wreckage:{x:14,y:15},newtown:{x:14,y:12},felixlab:{x:14,y:22}};
   const sp=spawns[zid]||{x:14,y:14};
   G.zone=zid;
   G.prevZone=typeof zid==='number'?zid:1;
